@@ -117,9 +117,42 @@ class LinePosition:
     def copy_pos(self):
         return LinePosition(self.ind, self.line_num, self.col_num, self.file_name, self.file_txt)
     
+#######################################
+# NODE CLASS
+#######################################
 
-
+class NumNode:
+    def __init__(self, num_tkn):
+        self.num_tkn = self.num_tkn
     
+    def __repr__(self):
+        return f'NumNode({self.num_tkn})'
+    
+class OpNode:
+    def __init__(self, left, op_tkn, right):
+        self.left = left
+        self.op_tkn = op_tkn
+        self.right = right
+    
+    def __repr__(self):
+        return f'OpNode({self.left}, {self.op_tkn}, {self.right})'
+
+#######################################
+# PARSER HANDLER
+#######################################
+
+class Parser:
+    def __init__(self, tkns):
+        self.tkns = tkns
+        self.tkn_ind = 1
+        self.next()
+    
+    def next(self):
+        self.tkn_ind += 1
+        if self.tkn_ind < len(self.tkns):
+            self.curr_tkn = self.tkns[self.tkn_ind]
+        return self.curr_tkn
+
 #######################################
 # RUN HANDLER
 #######################################
