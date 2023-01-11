@@ -10,14 +10,23 @@ WT_MUL = 'MUL'
 WT_DIV = 'DIV'
 WT_PLUS = 'PLUS'
 WT_MINUS = 'MINUS'
+WT_EOF = 'EOF'
 
 DIGITS = '0123456789'
 SUPPORTED_CHARS = '()*/+-'
 
 class Token:
-    def __init__(self, wir_type, value=None):
+    def __init__(self, wir_type, value=None, start_pos=None, end_pos=None):
         self.type = wir_type
         self.value = value
+        
+        if start_pos:
+            self.start_pos = start_pos.copy_pos()
+            self.end_pos = start_pos.copy_pos()
+            self.end_pos.next()
+        
+        if end_pos:
+            self.end_pos = end_pos.copy_pos()
     
     def __repr__(self):
         if self.value:
@@ -58,26 +67,29 @@ class Lexer:
                 unknown = self.curr_char
                 self.next_char()
                 return [], UnsupportedCharacterError(start_pos, self.pos, unknown)
+        
+        tkns.append(Token(WT_EOF, start_pos=self.pos))
         return tkns, None
 
     def make_op_tkn(self):
         if self.curr_char == '(':
-            return Token(WT_LEFTPAR)
+            return Token(WT_LEFTPAR, start_pos=self.pos)
         elif self.curr_char == ')':
-            return Token(WT_RIGHTPAR)
+            return Token(WT_RIGHTPAR, start_pos=self.pos)
         elif self.curr_char == '*':
-            return Token(WT_MUL)
+            return Token(WT_MUL, start_pos=self.pos)
         elif self.curr_char == '/':
-            return Token(WT_DIV)
+            return Token(WT_DIV, start_pos=self.pos)
         elif self.curr_char == '+':
-            return Token(WT_PLUS)
+            return Token(WT_PLUS, start_pos=self.pos)
         elif self.curr_char == '-':
-            return Token(WT_MINUS)
+            return Token(WT_MINUS, start_pos=self.pos)
         return
 
     def make_num_tkn(self):
         num = ''
         decimal_tracker = 0
+        start_pos = self.pos.copy_pos()
 
         while self.curr_char is not None and (self.curr_char in DIGITS or self.curr_char == '.'):
             if self.curr_char == '.':
@@ -88,9 +100,9 @@ class Lexer:
             self.next_char()
         
         if decimal_tracker == 0:
-            return Token(WT_INT, str(num))
+            return Token(WT_INT, str(num), start_pos, self.pos)
         else:
-            return Token(WT_FLOAT, float(num))
+            return Token(WT_FLOAT, float(num), start_pos, self.pos)
 
 #######################################
 # LINE_POSITION CLASS
@@ -128,14 +140,22 @@ class NumNode:
     def __repr__(self):
         return f'{self.num_tkn}'
     
-class OpNode:
+class BOpNode:
     def __init__(self, left, op_tkn, right):
         self.left = left
         self.op_tkn = op_tkn
         self.right = right
     
     def __repr__(self):
-        return f'ON({self.left}, {self.op_tkn}, {self.right})'
+        return f'BON({self.left}, {self.op_tkn}, {self.right})'
+
+class UOpNode:
+    def __init__(self, op_tkn, node):
+        self.op_tkn = op_tkn
+        self.node = node
+
+    def __repr__(self):
+        return f'UON({self.op_tkn}, {self.node})'
 
 #######################################
 # PARSER HANDLER
@@ -157,37 +177,93 @@ class Parser:
     
     #expr
     def pm_func(self):
-        l = self.md_func()
+        result = ParseResult()
+        l = result.register(self.md_func())
+        if result.err: return result
 
         while self.curr_tkn.type in (WT_PLUS, WT_MINUS):
             tkn = self.curr_tkn
-            self.next()
-            r = self.md_func()
-            l = OpNode(l, tkn, r)
+            result.register(self.next())
+            r = result.register(self.md_func())
+            if result.err: return result
+            l = BOpNode(l, tkn, r)
         
-        return l
+        return result.success(l)
         
     #term
     def md_func(self):
-        l = self.num_func()
+        result = ParseResult()
+        l = result.register(self.num_func())
+        if result.err: return result
 
         while self.curr_tkn.type in (WT_MUL, WT_DIV):
             tkn = self.curr_tkn
-            self.next()
-            r = self.num_func()
-            l = OpNode(l, tkn, r)
+            result.register(self.next())
+            r = result.register(self.num_func())
+            if result.err: return result
+            l = BOpNode(l, tkn, r)
         
-        return l
+        return result.success(l)
 
     #factor
     def num_func(self):
-        if self.curr_tkn.type == WT_INT or self.curr_tkn == WT_FLOAT:
-            num_node = NumNode(self.curr_tkn)
-            self.next()
-            return num_node
+        result = ParseResult()
+        tkn = self.curr_tkn
+
+        if tkn.type in (WT_PLUS, WT_MINUS):
+            result.register(self.next())
+            num_node = result.register(self.num_func())
+            if result.err: return result
+            return result.success(UOpNode(tkn, num_node))
+        
+        elif self.curr_tkn.type == WT_INT or self.curr_tkn == WT_FLOAT:
+            result.register(self.next())
+            return result.success(NumNode(tkn))
+
+        elif tkn.type == WT_LEFTPAR:
+            result.register(self.next())
+            pm_node = result.register(self.pm_func())
+            if result.err: return result
+            if self.curr_tkn.type == WT_RIGHTPAR:
+                result.register(self.next())
+                return result.success(pm_node)
+            else:
+                return result.failure(IllegalSyntaxError(
+                    self.curr_tkn.start_pos, self.curr_tkn.end_pos, 
+                    "Expected ')'"
+                    ))
+
+        return result.failure(IllegalSyntaxError(tkn.start_pos, tkn.end_pos, "Expected Int or Float"))
     
     def parse(self):
-        return self.pm_func()
+        result = self.pm_func()
+        if not result.err and self.curr_tkn.type is not WT_EOF:
+            result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "Expected '+', '-', '*', or '/'"))
+        return result
+
+#######################################
+# PARSE RESULT HANDLER
+#######################################
+
+class ParseResult:
+    def __init__(self):
+        self.err = None
+        self.pr_node = None
+
+    def register(self, res):
+        if isinstance(res, ParseResult):
+            if res.err: self.err = res.err
+            return res.pr_node
+        
+        return res
+
+    def success(self, pr_node):
+        self.pr_node = pr_node
+        return self
+
+    def failure(self, err):
+        self.err = err
+        return self
 
 #######################################
 # RUN HANDLER
@@ -196,13 +272,14 @@ class Parser:
 def run_program(file_name, text):
     new_lexer = Lexer(file_name, text)
     tkns, err = new_lexer.make_tokens()
+    
     if err:
         return None, err
 
     create_parser = Parser(tkns)
     gen_tree = create_parser.parse()
 
-    return gen_tree, None
+    return gen_tree.pr_node, gen_tree.err
 
 #######################################
 # ERROR HANDLER
@@ -220,9 +297,9 @@ class Error:
 
 class UnsupportedCharacterError(Error):
      def __init__(self, start_pos, end_pos, desc):
-         super().__init__(start_pos, end_pos, "UnsupportedCharacterError", desc)
+         super().__init__(start_pos, end_pos, "Unsupported Character", desc)
 
 class IllegalSyntaxError(Error):
     def __init__(self, start_pos, end_pos, desc):
-        super().__init__(start_pos, end_pos, "IllegalSyntaxError", desc)
+        super().__init__(start_pos, end_pos, "Illegal Syntax", desc)
 
