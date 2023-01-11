@@ -48,7 +48,7 @@ class Lexer:
             if self.curr_char == ' ' or self.curr_char == '\t':
                 self.next_char()
             elif self.curr_char in SUPPORTED_CHARS:
-                curr_char_tkn = self.make_op_tkn(self.curr_char)
+                curr_char_tkn = self.make_op_tkn()
                 tkns.append(curr_char_tkn)
                 self.next_char()
             elif self.curr_char in DIGITS:
@@ -57,10 +57,10 @@ class Lexer:
                 start_pos = self.pos.copy_pos()
                 unknown = self.curr_char
                 self.next_char()
-                return [], IllegalCharacterError(start_pos, self.pos, unknown)
+                return [], UnsupportedCharacterError(start_pos, self.pos, unknown)
         return tkns, None
 
-    def make_op_tkn(self, curr_char):
+    def make_op_tkn(self):
         if self.curr_char == '(':
             return Token(WT_LEFTPAR)
         elif self.curr_char == ')':
@@ -104,7 +104,7 @@ class LinePosition:
         self.file_name = file_name
         self.file_txt = file_txt
     
-    def next(self, curr_char):
+    def next(self, curr_char=None):
         self.ind += 1
         self.col_num += 1
 
@@ -118,15 +118,15 @@ class LinePosition:
         return LinePosition(self.ind, self.line_num, self.col_num, self.file_name, self.file_txt)
     
 #######################################
-# NODE CLASS
+# NODE CLASSES (for parser)
 #######################################
 
 class NumNode:
     def __init__(self, num_tkn):
-        self.num_tkn = self.num_tkn
+        self.num_tkn = num_tkn
     
     def __repr__(self):
-        return f'NumNode({self.num_tkn})'
+        return f'{self.num_tkn}'
     
 class OpNode:
     def __init__(self, left, op_tkn, right):
@@ -135,7 +135,7 @@ class OpNode:
         self.right = right
     
     def __repr__(self):
-        return f'OpNode({self.left}, {self.op_tkn}, {self.right})'
+        return f'ON({self.left}, {self.op_tkn}, {self.right})'
 
 #######################################
 # PARSER HANDLER
@@ -144,7 +144,8 @@ class OpNode:
 class Parser:
     def __init__(self, tkns):
         self.tkns = tkns
-        self.tkn_ind = 1
+        self.tkn_ind = -1
+        self.curr_tkn = None
         self.next()
     
     def next(self):
@@ -152,6 +153,41 @@ class Parser:
         if self.tkn_ind < len(self.tkns):
             self.curr_tkn = self.tkns[self.tkn_ind]
         return self.curr_tkn
+    
+    
+    #expr
+    def pm_func(self):
+        l = self.md_func()
+
+        while self.curr_tkn.type in (WT_PLUS, WT_MINUS):
+            tkn = self.curr_tkn
+            self.next()
+            r = self.md_func()
+            l = OpNode(l, tkn, r)
+        
+        return l
+        
+    #term
+    def md_func(self):
+        l = self.num_func()
+
+        while self.curr_tkn.type in (WT_MUL, WT_DIV):
+            tkn = self.curr_tkn
+            self.next()
+            r = self.num_func()
+            l = OpNode(l, tkn, r)
+        
+        return l
+
+    #factor
+    def num_func(self):
+        if self.curr_tkn.type == WT_INT or self.curr_tkn == WT_FLOAT:
+            num_node = NumNode(self.curr_tkn)
+            self.next()
+            return num_node
+    
+    def parse(self):
+        return self.pm_func()
 
 #######################################
 # RUN HANDLER
@@ -160,7 +196,13 @@ class Parser:
 def run_program(file_name, text):
     new_lexer = Lexer(file_name, text)
     tkns, err = new_lexer.make_tokens()
-    return tkns, err
+    if err:
+        return None, err
+
+    create_parser = Parser(tkns)
+    gen_tree = create_parser.parse()
+
+    return gen_tree, None
 
 #######################################
 # ERROR HANDLER
@@ -176,7 +218,11 @@ class Error:
     def string_form(self):
         return f'{self.title}: {self.desc} \n in File {self.start_pos.file_name} \n at line {self.start_pos.line_num + 1}'
 
-class IllegalCharacterError(Error):
+class UnsupportedCharacterError(Error):
      def __init__(self, start_pos, end_pos, desc):
-         super().__init__(start_pos, end_pos, "IllegalCharacterError", desc)
+         super().__init__(start_pos, end_pos, "UnsupportedCharacterError", desc)
+
+class IllegalSyntaxError(Error):
+    def __init__(self, start_pos, end_pos, desc):
+        super().__init__(start_pos, end_pos, "IllegalSyntaxError", desc)
 
