@@ -68,6 +68,12 @@ class Num:
                 return Num(eval(f'{self.value} ** {other_num.value}')).set_context(self.context), None
             return Num(eval(f'{self.value} {operation} {other_num.value}')).set_context(self.context), None
 
+    def copy_pos(self):
+        c = Num(self.value)
+        c.set_pos(self.start_pos, self.end_pos)
+        c.set_context(self.context)
+        return c
+
     def set_context(self, context=None):
         self.context = context
         return self
@@ -157,7 +163,7 @@ class Lexer:
 
         while self.curr_char is not None and self.curr_char in LETTERS + DIGITS + '_':
             iden_str += self.curr_char
-            self.next()
+            self.next_char()
         
         tkn_type = WT_KEYWORD if iden_str in KEYWORDS else WT_IDENTIFIER
 
@@ -253,49 +259,51 @@ class Parser:
             self.curr_tkn = self.tkns[self.tkn_ind]
         return self.curr_tkn
     
+    def bin_op(self, func1, operations, func2=None):
+        result = ParseResult()
+        l = result.register(func1())
+        if result.err: return result
+
+        while self.curr_tkn.type in operations:
+            tkn = self.curr_tkn
+            result.register_next()
+            self.next()
+            r = result.register(func2())
+            if result.err: return result
+            l = BOpNode(l, tkn, r)
+        
+        return result.success(l)
+    
     #expr
     def pm_func(self):
         result = ParseResult()
 
         if self.curr_tkn.matches(WT_KEYWORD, 'Var'):
-            res.register(self.next())
+            result.register_next()
+            self.next()
             if self.curr_tkn.type != WT_IDENTIFIER:
-                return res.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "Identifier Expected"))
+                return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "Identifier Expected"))
             var_name = self.curr_tkn
-            res.register(self.next())
+            result.register_next()
+            self.next()
             if self.curr_tkn.type != WT_EQ:
-                return res.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "'=' Expected"))
-            res.register(self.next())
-            expression = res.register(self.pm_func)
-            if res.err: return res
-            return res.success(AssignVNode(var_name, expression))
-
-        l = result.register(self.md_func())
-        if result.err: return result
-
-        while self.curr_tkn.type in (WT_PLUS, WT_MINUS):
-            tkn = self.curr_tkn
-            result.register(self.next())
-            r = result.register(self.md_func())
+                return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "'=' Expected"))
+            result.register_next()
+            self.next()
+            expression = result.register(self.pm_func())
             if result.err: return result
-            l = BOpNode(l, tkn, r)
-        
-        return result.success(l)
+            return result.success(AssignVNode(var_name, expression))
+
+        new_node = result.register(self.bin_op(self.md_func, (WT_PLUS, WT_MINUS), self.md_func))
+
+        if result.err:
+            return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "Expected int, float, identifier, Var, '+', '-', or '('"))
+
+        return result.success(new_node)
         
     #term
     def md_func(self):
-        result = ParseResult()
-        l = result.register(self.num_func())
-        if result.err: return result
-
-        while self.curr_tkn.type in (WT_MUL, WT_DIV):
-            tkn = self.curr_tkn
-            result.register(self.next())
-            r = result.register(self.num_func())
-            if result.err: return result
-            l = BOpNode(l, tkn, r)
-        
-        return result.success(l)
+        return self.bin_op(self.num_func, (WT_MUL, WT_DIV), self.num_func)
 
     #factor
     def num_func(self):
@@ -303,7 +311,8 @@ class Parser:
         tkn = self.curr_tkn
 
         if tkn.type in (WT_PLUS, WT_MINUS):
-            result.register(self.next())
+            result.register_next()
+            self.next()
             num_node = result.register(self.num_func())
             if result.err: return result
             return result.success(UOpNode(tkn, num_node))
@@ -317,7 +326,8 @@ class Parser:
 
         while self.curr_tkn.type in (WT_POW, ):
             tkn = self.curr_tkn
-            result.register(self.next())
+            result.register_next()
+            self.next()
             r = result.register(self.num_func())
             if result.err: return result
             l = BOpNode(l, tkn, r)
@@ -330,19 +340,23 @@ class Parser:
         tkn = self.curr_tkn
 
         if self.curr_tkn.type == WT_INT or self.curr_tkn == WT_FLOAT:
-            result.register(self.next())
+            result.register_next()
+            self.next()
             return result.success(NumNode(tkn))
 
         elif tkn.type == WT_IDENTIFIER:
-            result.register(self.next())
+            result.register_next()
+            self.next()
             return result.success(AccessVNode(tkn))
 
         elif tkn.type == WT_LEFTPAR:
-            result.register(self.next())
+            result.register_next()
+            self.next()
             pm_node = result.register(self.pm_func())
             if result.err: return result
             if self.curr_tkn.type == WT_RIGHTPAR:
-                result.register(self.next())
+                result.register_next()
+                self.next()
                 return result.success(pm_node)
             else:
                 return result.failure(IllegalSyntaxError(
@@ -352,7 +366,7 @@ class Parser:
 
         return result.failure(IllegalSyntaxError(
                     tkn.start_pos, tkn.end_pos, 
-                    "Expected int, float, '+', '-', or '('"
+                    "Expected int, float, identifier, '+', '-', or '('"
                     ))
 
     def parse(self):
@@ -369,20 +383,23 @@ class ParseResult:
     def __init__(self):
         self.err = None
         self.pr_node = None
+        self.next_count = 0
 
     def register(self, res):
-        if isinstance(res, ParseResult):
-            if res.err: self.err = res.err
-            return res.pr_node
-        
-        return res
+        self.next_count += res.next_count
+        if res.err: self.err = res.err
+        return res.pr_node
+
+    def register_next(self):
+        self.next_count += 1
 
     def success(self, pr_node):
         self.pr_node = pr_node
         return self
 
     def failure(self, err):
-        self.err = err
+        if not self.err or self.next_count == 0:
+            self.err = err
         return self
 
 #######################################
@@ -406,6 +423,7 @@ class Interpreter:
         if not value:
             return result.failure(RuntimeError(node.start_pos, node.end_pos, f"'{var_name} is not defined", context))
         
+        value = value.copy_pos().set_pos(node.start_pos, node.end_pos)
         return result.success(value)
     
     def visit_AssignVNode(self, node, context):
