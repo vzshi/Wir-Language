@@ -35,6 +35,27 @@ class Token:
             return f'{self.type}'
 
 #######################################
+# VALUES CLASSES
+#######################################
+
+class Num:
+    def __init__(self, value):
+        self.value = value
+        self.set_pos()
+    
+    def set_pos(self, start_pos=None, end_pos=None):
+        self.start_pos = start_pos
+        self.end_pos = end_pos
+        retrun self
+
+    def basic_ops(self, other_num, operation):
+        if isinstance(other_num, Num):
+            return Num(eval(self.value + operation + other_num.value))
+        
+    def __repr__(self):
+        return str(self.value)
+
+#######################################
 # LEXER CLASS
 #######################################
 
@@ -136,6 +157,8 @@ class LinePosition:
 class NumNode:
     def __init__(self, num_tkn):
         self.num_tkn = num_tkn
+        self.start_pos = self.num_tkn.start_pos
+        self.end_pos = self.num_tkn.end_pos
     
     def __repr__(self):
         return f'{self.num_tkn}'
@@ -145,6 +168,8 @@ class BOpNode:
         self.left = left
         self.op_tkn = op_tkn
         self.right = right
+        self.start_pos = self.left.start_pos
+        self.end_pos = self.right.end_pos
     
     def __repr__(self):
         return f'BON({self.left}, {self.op_tkn}, {self.right})'
@@ -153,6 +178,8 @@ class UOpNode:
     def __init__(self, op_tkn, node):
         self.op_tkn = op_tkn
         self.node = node
+        self.start_pos = self.op_tkn.start_pos
+        self.end_pos = self.op_tkn.end_pos
 
     def __repr__(self):
         return f'UON({self.op_tkn}, {self.node})'
@@ -278,13 +305,30 @@ class Interpreter:
         raise Exception(f'No visit_{type(node).__name))} method defined')
 
     def visit_NumNode(self, node):
-        
+        return Num(node.num_tkn.value).set_pos(node.start_pos, node.end_pos)
+
     def visit_BOpNode(self, node):
-        self.visit(node.left)
-        self.visit(node.right)
+        l = self.visit(node.left)
+        r = self.visit(node.right)
+
+        if node.op_tkn.type == WT_PLUS:
+            result = l.basic_ops(r, '+')
+        elif node.op_tkn.type == WT_MINUS:
+            result = l.basic_ops(r, '-')
+        elif node.op_tkn.type == WT_MUL:
+            result = l.basic_ops(r, '*')
+        elif node.op_tkn.type == WT_DIV:
+            result = l.basic_ops(r, '/')
+        
+        return result.set_pos(node.start_pos, node.end_pos)
 
     def visit_UOpNode(self, node):
-        self.visit(node.node)
+        number = self.visit(node.node)
+
+        if node.op_tkn.type == WT_MINUS:
+            number = number.basic_ops(Num(-1), '*')
+        
+        return number.set_pos(node.start_pos, node.end_pos)
 
 #######################################
 # RUN HANDLER
@@ -302,10 +346,10 @@ def run_program(file_name, text):
     if gen_tree.err: return None, gen_tree.err
 
     interp = Interpreter()
-    interp.visit(gen_tree.pr_node)
+    result = interp.visit(gen_tree.pr_node)
 
 
-    return gen_tree.pr_node, gen_tree.err
+    return result, None
 
 #######################################
 # ERROR HANDLER
