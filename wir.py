@@ -46,11 +46,15 @@ class Num:
     def set_pos(self, start_pos=None, end_pos=None):
         self.start_pos = start_pos
         self.end_pos = end_pos
-        retrun self
+        return self
 
     def basic_ops(self, other_num, operation):
         if isinstance(other_num, Num):
-            return Num(eval(self.value + operation + other_num.value))
+            if operation == '/':
+                if other_num.value == 0:
+                    return None, RuntimeError(other_num.start_pos, other_num.end_pos
+                                            "Division by Zero")
+            return Num(eval(f'{self.value} {operation} {other_num.value}')), None
         
     def __repr__(self):
         return str(self.value)
@@ -300,35 +304,52 @@ class Interpreter:
     def visit(self, node):
         method_name = f'visit_{type(node).__name__}'
         method = getattr(self, method_name, self.no_visit)
+        return method(node)
     
     def no_visit(self, node):
-        raise Exception(f'No visit_{type(node).__name))} method defined')
+        raise Exception(f'No visit_{type(node).__name__} method defined')
 
     def visit_NumNode(self, node):
-        return Num(node.num_tkn.value).set_pos(node.start_pos, node.end_pos)
+        rs = RuntimeResult()
+        return rs.success(
+            Num(node.num_tkn.value).set_pos(
+            node.start_pos, node.end_pos))
 
     def visit_BOpNode(self, node):
-        l = self.visit(node.left)
-        r = self.visit(node.right)
+        rs = RuntimeResult()
+        l = rs.register(self.visit(node.left))
+        if rs.err: return rs
+        r = rs.register(self.visit(node.right))
+        if rs.err: return rs
 
         if node.op_tkn.type == WT_PLUS:
-            result = l.basic_ops(r, '+')
+            result, err = l.basic_ops(r, '+')
         elif node.op_tkn.type == WT_MINUS:
-            result = l.basic_ops(r, '-')
+            result, err = l.basic_ops(r, '-')
         elif node.op_tkn.type == WT_MUL:
-            result = l.basic_ops(r, '*')
+            result, err = l.basic_ops(r, '*')
         elif node.op_tkn.type == WT_DIV:
-            result = l.basic_ops(r, '/')
+            result, err = l.basic_ops(r, '/')
+
+        if err:
+            return rs.failure(err)
         
-        return result.set_pos(node.start_pos, node.end_pos)
+        return rs.success(result.set_pos(node.start_pos, node.end_pos))
 
     def visit_UOpNode(self, node):
-        number = self.visit(node.node)
+        rs = RuntimeResult()
+        number = rs.register(self.visit(node.node))
+        if rs.err: return rs
+
+        err = None
 
         if node.op_tkn.type == WT_MINUS:
-            number = number.basic_ops(Num(-1), '*')
+            number, err = number.basic_ops(Num(-1), '*')
+
+        if err:
+            return rs.failure(err)
         
-        return number.set_pos(node.start_pos, node.end_pos)
+        return rs.success(number.set_pos(node.start_pos, node.end_pos))
 
 #######################################
 # RUN HANDLER
@@ -338,18 +359,38 @@ def run_program(file_name, text):
     new_lexer = Lexer(file_name, text)
     tkns, err = new_lexer.make_tokens()
     
-    if err:
-        return None, err
+    if err: return None, err
 
     create_parser = Parser(tkns)
     gen_tree = create_parser.parse()
+
     if gen_tree.err: return None, gen_tree.err
 
     interp = Interpreter()
     result = interp.visit(gen_tree.pr_node)
 
+    return result.value, result.err
 
-    return result, None
+#######################################
+# RUNTIME RESULT CLASS 
+#######################################
+
+class RuntimeResult:
+    def __init__(self):
+        self.value = None
+        self.err = None
+    
+    def register(self, result):
+        if result.err: self.err = result.err
+        return result.value
+    
+    def success(self, value):
+        self.value = value
+        return self
+    
+    def failure(self, err):
+        self.err = err
+        return self
 
 #######################################
 # ERROR HANDLER
@@ -372,4 +413,9 @@ class UnsupportedCharacterError(Error):
 class IllegalSyntaxError(Error):
     def __init__(self, start_pos, end_pos, desc):
         super().__init__(start_pos, end_pos, "Illegal Syntax", desc)
+
+class RuntimeError(Error):
+    def __init__(self, start_pos, end_pos, desc):
+        super().__init__(start_pos, end_pos, "Runtime Error", desc)
+
 
