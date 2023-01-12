@@ -1,3 +1,5 @@
+import string
+
 #######################################
 # TOKEN CLASS
 #######################################
@@ -6,14 +8,20 @@ WT_INT = 'INT'
 WT_FLOAT = 'FLOAT'
 WT_LEFTPAR = 'LEFTPAR'
 WT_RIGHTPAR = 'RIGHTPAR'
+WT_POW = 'POW'
 WT_MUL = 'MUL'
 WT_DIV = 'DIV'
 WT_PLUS = 'PLUS'
 WT_MINUS = 'MINUS'
 WT_EOF = 'EOF'
+WT_KEYWORD = 'KEYWORD'
+WT_IDENTIFIER = 'IDENTIFIER'
+WT_EQ = 'EQ'
 
 DIGITS = '0123456789'
-SUPPORTED_CHARS = '()*/+-'
+LETTERS = string.ascii_letters
+KEYWORDS = ['Var']
+SUPPORTED_CHARS = '()*/+-^='
 
 class Token:
     def __init__(self, wir_type, value=None, start_pos=None, end_pos=None):
@@ -28,6 +36,9 @@ class Token:
         if end_pos:
             self.end_pos = end_pos.copy_pos()
     
+    def matches(self, type_, value):
+        return self.type == type_ and self.value == value
+
     def __repr__(self):
         if self.value:
             return f'{self.type}: {self.value}'
@@ -53,6 +64,8 @@ class Num:
         if isinstance(other_num, Num):
             if operation == '/' and other_num.value == '0':
                 return None, RuntimeError(other_num.start_pos, other_num.end_pos, "Division by Zero", self.context)
+            if operation == '^':
+                return Num(eval(f'{self.value} ** {other_num.value}')).set_context(self.context), None
             return Num(eval(f'{self.value} {operation} {other_num.value}')).set_context(self.context), None
 
     def set_context(self, context=None):
@@ -90,6 +103,8 @@ class Lexer:
                 self.next_char()
             elif self.curr_char in DIGITS:
                 tkns.append(self.make_num_tkn())
+            elif self.curr_char in LETTERS:
+                tkns.append(self.make_identifier())
             else:
                 start_pos = self.pos.copy_pos()
                 unknown = self.curr_char
@@ -104,6 +119,8 @@ class Lexer:
             return Token(WT_LEFTPAR, start_pos=self.pos)
         elif self.curr_char == ')':
             return Token(WT_RIGHTPAR, start_pos=self.pos)
+        elif self.curr_char == '^':
+            return Token(WT_POW, start_pos=self.pos)
         elif self.curr_char == '*':
             return Token(WT_MUL, start_pos=self.pos)
         elif self.curr_char == '/':
@@ -112,6 +129,8 @@ class Lexer:
             return Token(WT_PLUS, start_pos=self.pos)
         elif self.curr_char == '-':
             return Token(WT_MINUS, start_pos=self.pos)
+        elif self.curr_char == '=':
+            return Token(WT_EQ, start_pos=self.pos)
         return
 
     def make_num_tkn(self):
@@ -131,6 +150,18 @@ class Lexer:
             return Token(WT_INT, str(num), start_pos, self.pos)
         else:
             return Token(WT_FLOAT, float(num), start_pos, self.pos)
+    
+    def make_identifier(self):
+        iden_str = ''
+        start_pos = self.pos.copy_pos()
+
+        while self.curr_char is not None and self.curr_char in LETTERS + DIGITS + '_':
+            iden_str += self.curr_char
+            self.next()
+        
+        tkn_type = WT_KEYWORD if iden_str in KEYWORDS else WT_IDENTIFIER
+
+        return Token(tkn_type, iden_str, start_pos, self.pos)
 
 #######################################
 # LINE_POSITION CLASS
@@ -191,6 +222,20 @@ class UOpNode:
     def __repr__(self):
         return f'UON({self.op_tkn}, {self.node})'
 
+class AssignVNode:
+    def __init__(self, var_name_tkn, value_node):
+        self.var_name_tkn = var_name_tkn
+        self.value_node = value_node
+        self.start_pos = var_name_tkn.start_pos
+        self.end_pos = value_node.end_pos
+
+class AccessVNode:
+    def __init__(self, var_name_tkn):
+        self.var_name_tkn = var_name_tkn
+        self.start_pos = self.var_name_tkn.start_pos
+        self.end_pos = self.var_name_tkn.end_pos
+
+
 #######################################
 # PARSER HANDLER
 #######################################
@@ -208,10 +253,23 @@ class Parser:
             self.curr_tkn = self.tkns[self.tkn_ind]
         return self.curr_tkn
     
-    
     #expr
     def pm_func(self):
         result = ParseResult()
+
+        if self.curr_tkn.matches(WT_KEYWORD, 'Var'):
+            res.register(self.next())
+            if self.curr_tkn.type != WT_IDENTIFIER:
+                return res.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "Identifier Expected"))
+            var_name = self.curr_tkn
+            res.register(self.next())
+            if self.curr_tkn.type != WT_EQ:
+                return res.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "'=' Expected"))
+            res.register(self.next())
+            expression = res.register(self.pm_func)
+            if res.err: return res
+            return res.success(AssignVNode(var_name, expression))
+
         l = result.register(self.md_func())
         if result.err: return result
 
@@ -249,10 +307,35 @@ class Parser:
             num_node = result.register(self.num_func())
             if result.err: return result
             return result.success(UOpNode(tkn, num_node))
+
+        return self.power()
+    
+    def power(self):
+        result = ParseResult()
+        l = result.register(self.pow_func())
+        if result.err: return result
+
+        while self.curr_tkn.type in (WT_POW, ):
+            tkn = self.curr_tkn
+            result.register(self.next())
+            r = result.register(self.num_func())
+            if result.err: return result
+            l = BOpNode(l, tkn, r)
         
-        elif self.curr_tkn.type == WT_INT or self.curr_tkn == WT_FLOAT:
+        return result.success(l)
+
+    #atom
+    def pow_func(self):
+        result = ParseResult()
+        tkn = self.curr_tkn
+
+        if self.curr_tkn.type == WT_INT or self.curr_tkn == WT_FLOAT:
             result.register(self.next())
             return result.success(NumNode(tkn))
+
+        elif tkn.type == WT_IDENTIFIER:
+            result.register(self.next())
+            return result.success(AccessVNode(tkn))
 
         elif tkn.type == WT_LEFTPAR:
             result.register(self.next())
@@ -267,8 +350,11 @@ class Parser:
                     "Expected ')'"
                     ))
 
-        return result.failure(IllegalSyntaxError(tkn.start_pos, tkn.end_pos, "Expected Int or Float"))
-    
+        return result.failure(IllegalSyntaxError(
+                    tkn.start_pos, tkn.end_pos, 
+                    "Expected int, float, '+', '-', or '('"
+                    ))
+
     def parse(self):
         result = self.pm_func()
         if not result.err and self.curr_tkn.type is not WT_EOF:
@@ -311,6 +397,26 @@ class Interpreter:
     
     def no_visit(self, node, context):
         raise Exception(f'No visit_{type(node).__name__} method defined')
+    
+    def visit_AccessVNode(self, node, context):
+        result = RuntimeResult()
+        var_name = node.var_name_tkn.value
+        value = context.symbol_table.get(var_name)
+
+        if not value:
+            return result.failure(RuntimeError(node.start_pos, node.end_pos, f"'{var_name} is not defined", context))
+        
+        return result.success(value)
+    
+    def visit_AssignVNode(self, node, context):
+        result = RuntimeResult()
+        var_name = node.var_name_tkn.value
+        value = result.register(self.visit(node.value_node, context))
+        if result.err: return result
+
+        context.symbol_table.set(var_name, value)
+        return result.success(value)
+
 
     def visit_NumNode(self, node, context):
         return RuntimeResult().success(
@@ -334,6 +440,8 @@ class Interpreter:
             result, err = l.basic_ops(r, '*')
         elif node.op_tkn.type == WT_DIV:
             result, err = l.basic_ops(r, '/')
+        elif node.op_tkn.type == WT_POW:
+            result, err = l.basic_ops(r, '^') 
 
         if err:
             return rs.failure(err)
@@ -356,8 +464,34 @@ class Interpreter:
             return rs.success(number.set_pos(node.start_pos, node.end_pos))
 
 #######################################
+# SYMBOL TABLE CLASS
+#######################################
+
+class SymbolTable:
+    def __init__(self):
+        self.symbols = {}
+
+        #keeps track of global symbol table
+        self.parent = None
+    
+    def get(self, name):
+        value = self.symbols.get(name, None)
+        if not value and self.parent:
+            return self.parent.get(name)
+        return value
+    
+    def set(self, name, value):
+        self.symbols[name] = value
+    
+    def remove(self, name):
+        del self.symbols[name]
+
+#######################################
 # RUN HANDLER
 #######################################
+
+global_sym_table = SymbolTable()
+global_sym_table.set("null", Num(0))
 
 def run_program(file_name, text):
     new_lexer = Lexer(file_name, text)
@@ -372,6 +506,7 @@ def run_program(file_name, text):
 
     interp = Interpreter()
     context = Context('<program>')
+    context.symbol_table = global_sym_table
     result = interp.visit(gen_tree.pr_node, context)
 
     return result.value, result.err
@@ -426,9 +561,7 @@ class RuntimeError(Error):
     
     def string_form(self):
         result = self.generate_traceback()
-        result += f'{self.title}: {self.desc} \n 
-                    in File {self.start_pos.file_name} \n 
-                    at line {self.start_pos.line_num + 1}'
+        result += f'{self.title}: {self.desc}'
         return result
     
     def generate_traceback(self):
@@ -437,9 +570,9 @@ class RuntimeError(Error):
         context = self.context
 
         while context:
-            result = f'In File {pos.file_name}, at line {str(pos.line_num + 1)}, in {context.display_name} \n' + result
+            result = f'\tIn File {pos.file_name}, at line {str(pos.line_num + 1)}, in {context.display_name} \n' + result
             pos = context.parent_entry_pos
-            context = parent
+            context = context.parent
 
         return 'Traceback (most recent call last):\n' + result
 
@@ -453,3 +586,4 @@ class Context:
         self.display_name = display_name
         self.parent = parent
         self.parent_entry_pos = parent_entry_pos
+        self.symbol_table = None
