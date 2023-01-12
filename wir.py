@@ -42,6 +42,7 @@ class Num:
     def __init__(self, value):
         self.value = value
         self.set_pos()
+        self.set_context()
     
     def set_pos(self, start_pos=None, end_pos=None):
         self.start_pos = start_pos
@@ -50,12 +51,14 @@ class Num:
 
     def basic_ops(self, other_num, operation):
         if isinstance(other_num, Num):
-            if operation == '/':
-                if other_num.value == 0:
-                    return None, RuntimeError(other_num.start_pos, other_num.end_pos
-                                            "Division by Zero")
-            return Num(eval(f'{self.value} {operation} {other_num.value}')), None
-        
+            if operation == '/' and other_num.value == '0':
+                return None, RuntimeError(other_num.start_pos, other_num.end_pos, "Division by Zero", self.context)
+            return Num(eval(f'{self.value} {operation} {other_num.value}')).set_context(self.context), None
+
+    def set_context(self, context=None):
+        self.context = context
+        return self
+    
     def __repr__(self):
         return str(self.value)
 
@@ -301,26 +304,27 @@ class ParseResult:
 #######################################
 
 class Interpreter:
-    def visit(self, node):
+    def visit(self, node, context):
         method_name = f'visit_{type(node).__name__}'
         method = getattr(self, method_name, self.no_visit)
-        return method(node)
+        return method(node, context)
     
-    def no_visit(self, node):
+    def no_visit(self, node, context):
         raise Exception(f'No visit_{type(node).__name__} method defined')
 
-    def visit_NumNode(self, node):
-        rs = RuntimeResult()
-        return rs.success(
-            Num(node.num_tkn.value).set_pos(
+    def visit_NumNode(self, node, context):
+        return RuntimeResult().success(
+            Num(node.num_tkn.value).set_context(context).set_pos(
             node.start_pos, node.end_pos))
 
-    def visit_BOpNode(self, node):
+    def visit_BOpNode(self, node, context):
         rs = RuntimeResult()
-        l = rs.register(self.visit(node.left))
+        l = rs.register(self.visit(node.left, context))
         if rs.err: return rs
-        r = rs.register(self.visit(node.right))
+        r = rs.register(self.visit(node.right, context))
         if rs.err: return rs
+
+        result, err = None, None
 
         if node.op_tkn.type == WT_PLUS:
             result, err = l.basic_ops(r, '+')
@@ -333,12 +337,12 @@ class Interpreter:
 
         if err:
             return rs.failure(err)
-        
-        return rs.success(result.set_pos(node.start_pos, node.end_pos))
+        else:
+            return rs.success(result.set_pos(node.start_pos, node.end_pos))
 
-    def visit_UOpNode(self, node):
+    def visit_UOpNode(self, node, context):
         rs = RuntimeResult()
-        number = rs.register(self.visit(node.node))
+        number = rs.register(self.visit(node.node, context))
         if rs.err: return rs
 
         err = None
@@ -348,8 +352,8 @@ class Interpreter:
 
         if err:
             return rs.failure(err)
-        
-        return rs.success(number.set_pos(node.start_pos, node.end_pos))
+        else:
+            return rs.success(number.set_pos(node.start_pos, node.end_pos))
 
 #######################################
 # RUN HANDLER
@@ -367,7 +371,8 @@ def run_program(file_name, text):
     if gen_tree.err: return None, gen_tree.err
 
     interp = Interpreter()
-    result = interp.visit(gen_tree.pr_node)
+    context = Context('<program>')
+    result = interp.visit(gen_tree.pr_node, context)
 
     return result.value, result.err
 
@@ -415,7 +420,36 @@ class IllegalSyntaxError(Error):
         super().__init__(start_pos, end_pos, "Illegal Syntax", desc)
 
 class RuntimeError(Error):
-    def __init__(self, start_pos, end_pos, desc):
+    def __init__(self, start_pos, end_pos, desc, context):
         super().__init__(start_pos, end_pos, "Runtime Error", desc)
+        self.context = context
+    
+    def string_form(self):
+        result = self.generate_traceback()
+        result += f'{self.title}: {self.desc} \n 
+                    in File {self.start_pos.file_name} \n 
+                    at line {self.start_pos.line_num + 1}'
+        return result
+    
+    def generate_traceback(self):
+        result = ''
+        pos = self.start_pos
+        context = self.context
+
+        while context:
+            result = f'In File {pos.file_name}, at line {str(pos.line_num + 1)}, in {context.display_name} \n' + result
+            pos = context.parent_entry_pos
+            context = parent
+
+        return 'Traceback (most recent call last):\n' + result
 
 
+#######################################
+# CONTEXT CLASS (for errors)
+#######################################
+
+class Context:
+    def __init__(self, display_name, parent=None, parent_entry_pos=None):
+        self.display_name = display_name
+        self.parent = parent
+        self.parent_entry_pos = parent_entry_pos
