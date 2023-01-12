@@ -17,11 +17,17 @@ WT_EOF = 'EOF'
 WT_KEYWORD = 'KEYWORD'
 WT_IDENTIFIER = 'IDENTIFIER'
 WT_EQ = 'EQ'
+WT_EQUALS = 'EQUALS'
+WT_NE = 'NE'
+WT_LT = 'LT'
+WT_GT = 'GT'
+WT_LTE = 'LTE'
+WT_GTE = 'GTE'
 
 DIGITS = '0123456789'
 LETTERS = string.ascii_letters
-KEYWORDS = ['Var']
-SUPPORTED_CHARS = '()*/+-^='
+KEYWORDS = ['Var', 'And', 'Or', 'Not']
+SUPPORTED_CHARS = '()*/+-^=<>!'
 
 class Token:
     def __init__(self, wir_type, value=None, start_pos=None, end_pos=None):
@@ -104,7 +110,9 @@ class Lexer:
             if self.curr_char == ' ' or self.curr_char == '\t':
                 self.next_char()
             elif self.curr_char in SUPPORTED_CHARS:
-                curr_char_tkn = self.make_op_tkn()
+                curr_char_tkn, err = self.make_op_tkn()
+                if err:
+                    return [], err
                 tkns.append(curr_char_tkn)
                 self.next_char()
             elif self.curr_char in DIGITS:
@@ -122,22 +130,74 @@ class Lexer:
 
     def make_op_tkn(self):
         if self.curr_char == '(':
-            return Token(WT_LEFTPAR, start_pos=self.pos)
+            return Token(WT_LEFTPAR, start_pos=self.pos), None
         elif self.curr_char == ')':
-            return Token(WT_RIGHTPAR, start_pos=self.pos)
+            return Token(WT_RIGHTPAR, start_pos=self.pos), None
         elif self.curr_char == '^':
-            return Token(WT_POW, start_pos=self.pos)
+            return Token(WT_POW, start_pos=self.pos), None
         elif self.curr_char == '*':
-            return Token(WT_MUL, start_pos=self.pos)
+            return Token(WT_MUL, start_pos=self.pos), None
         elif self.curr_char == '/':
-            return Token(WT_DIV, start_pos=self.pos)
+            return Token(WT_DIV, start_pos=self.pos), None
         elif self.curr_char == '+':
-            return Token(WT_PLUS, start_pos=self.pos)
+            return Token(WT_PLUS, start_pos=self.pos), None
         elif self.curr_char == '-':
-            return Token(WT_MINUS, start_pos=self.pos)
+            return Token(WT_MINUS, start_pos=self.pos), None
+        elif self.curr_char == '!':
+            tkn, err = self.make_not_equals()
+            if err: return [], err
+            return tkn, None
         elif self.curr_char == '=':
-            return Token(WT_EQ, start_pos=self.pos)
-        return
+            return self.make_equals()
+        elif self.curr_char == '<':
+            return self.make_lt()
+        elif self.curr_char == '>':
+            return self.make_gt()
+        return None, None
+    
+    def make_not_equals(self):
+        start_pos = self.pos.copy_pos()
+        self.next()
+
+        if self.curr_char == '=':
+            self.next()
+            return Token(WT_NE, start_pos=start_pos, end_pos=self.pos), None
+        
+        self.next()
+        return None, ExpectedCharError(start_pos, self.pos, "'=' Expected (after '!')")
+
+    def make_equals(self):
+        tkn_type = WT_EQ
+        start_pos = self.pos.copy_pos()
+        self.next()
+
+        if self.curr_char == '=':
+            self.next()
+            tkn_type = WT_EQUALS
+        
+        return Token(tkn_type, start_pos=start_pos, end_pos=end_pos), None
+
+    def make_lt(self):
+        tkn_type = WT_LT
+        start_pos = self.pos.copy_pos()
+        self.next()
+
+        if self.curr_char == '=':
+            self.next()
+            tkn_type = WT_LTE
+        
+        return Token(tkn_type, start_pos=start_pos, end_pos=end_pos), None
+
+    def make_gt(self):
+        tkn_type = WT_GT
+        start_pos = self.pos.copy_pos()
+        self.next()
+
+        if self.curr_char == '=':
+            self.next()
+            tkn_type = WT_GTE
+        
+        return Token(tkn_type, start_pos=start_pos, end_pos=end_pos), None
 
     def make_num_tkn(self):
         num = ''
@@ -264,7 +324,7 @@ class Parser:
         l = result.register(func1())
         if result.err: return result
 
-        while self.curr_tkn.type in operations:
+        while self.curr_tkn.type in operations or (self.curr_tkn.type, self.curr_tkn.value) in operations:
             tkn = self.curr_tkn
             result.register_next()
             self.next()
@@ -274,6 +334,24 @@ class Parser:
         
         return result.success(l)
     
+    def comp_func(self):
+        result = ParseResult()
+        if self.curr_tkn.matches(WT_KEYWORD, 'Not'):
+            operation_tkn = self.curr_tkn
+            result.register_next()
+            self.next()
+            node = result.register(self.comp_func())
+            if result.err: return result
+            return result.success(UOpNode(operation_tkn, node))
+        
+        node = result.register(self.bin_op(self.arith_func, (WT_EQUALS, WT_NE, WT_LT, WT_GT, WT_LTE, WT_GTE), self.arith_func))
+    
+        if result.err:
+            return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "Expected int, float, identifier, 'Not', '+', '-', or '('"))
+
+    def arith_func(self):
+        return self.bin_op(self.md_func, (WT_PLUS, WT_MINUS), self.md_func)
+
     #expr
     def pm_func(self):
         result = ParseResult()
@@ -294,7 +372,7 @@ class Parser:
             if result.err: return result
             return result.success(AssignVNode(var_name, expression))
 
-        new_node = result.register(self.bin_op(self.md_func, (WT_PLUS, WT_MINUS), self.md_func))
+        new_node = result.register(self.bin_op(self.comp_func, ((WT_KEYWORD, "And"), (WT_KEYWORD, "Or")), self.comp_func))
 
         if result.err:
             return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "Expected int, float, identifier, Var, '+', '-', or '('"))
@@ -567,6 +645,10 @@ class Error:
 class UnsupportedCharacterError(Error):
      def __init__(self, start_pos, end_pos, desc):
          super().__init__(start_pos, end_pos, "Unsupported Character", desc)
+
+class ExpectedCharError(Error):
+    def __init__(self, start_pos, end_pos, desc):
+        super().__init__(start_pos, end_pos, "Expected Character", desc)
 
 class IllegalSyntaxError(Error):
     def __init__(self, start_pos, end_pos, desc):
