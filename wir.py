@@ -73,6 +73,13 @@ class Num:
             if operation == '^':
                 return Num(eval(f'{self.value} ** {other_num.value}')).set_context(self.context), None
             return Num(eval(f'{self.value} {operation} {other_num.value}')).set_context(self.context), None
+            
+    def comp_ops(self, other_num, comparison):
+        if isinstance(other_num, Num):
+            return Num(eval(f'{self.value} {comparison} {other_num.value}')).set_context(self.context), None
+
+    def notted(self):
+        return Num(True if self.value == '0' or self.value == 0 else False).set_context(self.context), None
 
     def copy_pos(self):
         c = Num(self.value)
@@ -349,6 +356,8 @@ class Parser:
         if result.err:
             return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "Expected int, float, identifier, 'Not', '+', '-', or '('"))
 
+        return result.success(node)
+
     def arith_func(self):
         return self.bin_op(self.md_func, (WT_PLUS, WT_MINUS), self.md_func)
 
@@ -537,7 +546,24 @@ class Interpreter:
         elif node.op_tkn.type == WT_DIV:
             result, err = l.basic_ops(r, '/')
         elif node.op_tkn.type == WT_POW:
-            result, err = l.basic_ops(r, '^') 
+            result, err = l.basic_ops(r, '^')
+        elif node.op_tkn.type == WT_EQUALS:
+            result, err = l.comp_ops(r, '==')
+        elif node.op_tkn.type == WT_NE:
+            result, err = l.comp_ops(r, '!=')
+        elif node.op_tkn.type == WT_LT:
+            result, err = l.comp_ops(r, '<')
+        elif node.op_tkn.type == WT_GT:
+            result, err = l.comp_ops(r, '>')
+        elif node.op_tkn.type == WT_LTE:
+            result, err = l.comp_ops(r, '<=')
+        elif node.op_tkn.type == WT_EQUALS:
+            result, err = l.comp_ops(r, '>=')
+        elif node.op_tkn.matches(WT_KEYWORD, 'And'):
+            result, err = l.comp_ops(r, 'and')
+        elif node.op_tkn.matches(WT_KEYWORD, 'Or'):
+            result, err = l.comp_ops(r, 'or')
+        
 
         if err:
             return rs.failure(err)
@@ -553,6 +579,8 @@ class Interpreter:
 
         if node.op_tkn.type == WT_MINUS:
             number, err = number.basic_ops(Num(-1), '*')
+        elif node.op_tkn.matches(WT_KEYWORD, 'Not'):
+            number, err = number.notted()
 
         if err:
             return rs.failure(err)
