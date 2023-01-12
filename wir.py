@@ -266,6 +266,27 @@ class ParseResult:
         return self
 
 #######################################
+# INTERPRETER HANDLER
+#######################################
+
+class Interpreter:
+    def visit(self, node):
+        method_name = f'visit_{type(node).__name__}'
+        method = getattr(self, method_name, self.no_visit)
+    
+    def no_visit(self, node):
+        raise Exception(f'No visit_{type(node).__name))} method defined')
+
+    def visit_NumNode(self, node):
+        
+    def visit_BOpNode(self, node):
+        self.visit(node.left)
+        self.visit(node.right)
+
+    def visit_UOpNode(self, node):
+        self.visit(node.node)
+
+#######################################
 # RUN HANDLER
 #######################################
 
@@ -278,6 +299,11 @@ def run_program(file_name, text):
 
     create_parser = Parser(tkns)
     gen_tree = create_parser.parse()
+    if gen_tree.err: return None, gen_tree.err
+
+    interp = Interpreter()
+    interp.visit(gen_tree.pr_node)
+
 
     return gen_tree.pr_node, gen_tree.err
 
