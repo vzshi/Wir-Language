@@ -27,7 +27,8 @@ WT_GTE = 'GTE'
 DIGITS = '0123456789'
 LETTERS = string.ascii_letters
 KEYWORDS = ['Var', 'And', 'Or', 'Not', 
-            'If', 'Then', 'Otherwise', 'Else']
+            'If', 'Then', 'Otherwise', 'Else',
+            'For', 'To', 'Inc', 'Do' 'While']
 SUPPORTED_CHARS = '()*/+-^=<>!'
 
 class Token:
@@ -319,6 +320,23 @@ class IfNode:
         self.start_pos = self.cases[0][0].start_pos
         self.end_pos = (self.else_case or self.cases[len(self.cases) - 1][0]).end_pos
 
+class ForNode:
+    def __init__(self, var_name, start_val, end_val, inc, body):
+        self.var_name = var_name
+        self.start_val = start_val
+        self.end_val = end_val
+        self.inc = inc
+        self.body = body
+        self.start_pos = self.var_name.start_pos
+        self.end_pos = self.body.end_pos
+
+class WhileNode:
+    def __init__(self, cond, body):
+        self.cond = cond
+        self.body = body
+        self.start_pos = self.cond.start_pos
+        self.end_pos = self.body.end_pos
+
 #######################################
 # PARSER HANDLER
 #######################################
@@ -465,6 +483,16 @@ class Parser:
             if result.err: return result
             return result.success(expr)
 
+        elif tkn.matches(WT_KEYWORD, 'For'):
+            expr = result.register(self.for_expr())
+            if result.err: return result
+            return result.success(expr)
+        
+        elif tkn.matches(WT_KEYWORD, 'While'):
+            expr = result.register(self.while_expr())
+            if result.err: return result
+            return result.success(expr)
+
         return result.failure(IllegalSyntaxError(
                     tkn.start_pos, tkn.end_pos, 
                     "Expected int, float, identifier, '+', '-', or '('"
@@ -520,6 +548,80 @@ class Parser:
             else_case = expr
         
         return result.success(IfNode(total_cases, else_case))
+
+    def for_expr(self):
+        result = ParseResult()
+
+        if not self.curr_tkn.matches(WT_KEYWORD, 'For'):
+            return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "'For' Expected"))
+
+        result.register_next()
+        self.next()
+
+        if self.curr_tkn.type != WT_IDENTIFIER:
+            return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "Identifier Expected"))
+        var_name = self.curr_tkn
+        
+        result.register_next()
+        self.next()
+
+        if self.curr_tkn != WT_EQ:
+            return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "'=' Expected"))
+ 
+        result.register_next()
+        self.next()
+
+        start_val = result.register(self.pm_func())
+        if result.err: return result
+
+        if not self.curr_tkn.matches(WT_KEYWORD, 'To'):
+            return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "'To' Expected"))
+
+        result.register_next()
+        self.next()
+
+        end_val = result.register(self.pm_func())
+        if result.err: return result
+
+        if self.curr_tkn.matches(WT_KEYWORD, 'Inc'):
+            result.register_next()
+            self.next()
+
+            inc_val = result.register(self.pm_func())
+            if result.err: return result
+        else:
+            inc_val = None
+        
+        if not self.curr_tkn.matches(WT_KEYWORD, 'Do'):
+            return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "'Do' Expected"))
+
+        result.register_next()
+        self.next()
+
+        body = result.register(self.pm_func())
+        if result.err: return result
+
+        return result.success(ForNode(var_name, start_val, end_val, inc_val, body))
+
+    def while_expr(self):
+        result = ParseResult()
+
+        if not self.curr_tkn.matches(WT_KEYWORD, 'While'):
+            return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "'While' Expected"))
+
+        result.register_next()
+        self.next()
+
+        cond = result.register(self.pm_func())
+        if result.err: return result
+
+        if not self.curr_tkn.matches(WT_KEYWORD, 'Do'):
+            return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "'Do' Expected"))
+        
+        body = result.register(self.pm_func())
+        if result.err: return result
+
+        return result.success(WhileNode(cond, body))
 
     def parse(self):
         result = self.pm_func()
@@ -669,6 +771,51 @@ class Interpreter:
             if result.err: return result
             return result.success(else_val)
         
+        return result.success(None)
+    
+    def visit_ForNode(self, node, context):
+        result = RuntimeResult()
+
+        start_val = result.register(self.visit(node.start_val, context))
+        if result.err: return result
+
+        end_val = result.register(self.visit(node.end_val, context))
+        if result.err: return result
+
+        if node.inc:
+            inc_val = result.register(self.visit(node.inc, context))
+            if result.err: return result
+        else:
+            inc_val = Num(1)
+        
+        i = start_val.value
+
+        if inc_val.value >= 0:
+            cond = lambda: i < end_val.value
+        else:
+            cond = lambda: i > end_val.value
+        
+        while condition():
+            context.symbol_table.set(node.var_name.value, Num(i))
+            i += inc_val.value
+
+            result.register(self.visit(node.body, context))
+            if result.err: return result
+        
+        return result.success(None)
+
+    def visit_WhileNode(self, node, context):
+        result = RuntimeResult()
+
+        while True:
+            cond = result.register(self.visit(node.cond, context))
+            if result.err: return result
+
+            if not cond.is_true(): break
+
+            result.register(self.visit(node.body, context))
+            if result.err: return result
+
         return result.success(None)
 
 #######################################
