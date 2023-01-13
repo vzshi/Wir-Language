@@ -23,12 +23,15 @@ WT_LT = 'LT'
 WT_GT = 'GT'
 WT_LTE = 'LTE'
 WT_GTE = 'GTE'
+WT_COMMA = 'COMMA'
+WT_ARROW = 'ARROW'
 
 DIGITS = '0123456789'
 LETTERS = string.ascii_letters
 KEYWORDS = ['Var', 'And', 'Or', 'Not', 
             'If', 'Then', 'Otherwise', 'Else',
-            'For', 'To', 'Inc', 'Do', 'While']
+            'For', 'To', 'Inc', 'Do', 'While', 
+            'Func']
 SUPPORTED_CHARS = '()*/+-^=<>!'
 
 class Token:
@@ -57,7 +60,42 @@ class Token:
 # VALUES CLASSES
 #######################################
 
-class Num:
+class Value:
+    def __init__(self):
+        self.set_pos()
+        self.set_context()
+    
+    def set_pos(self, start_pos=None, end_pos=None):
+        self.start_pos = start_pos
+        self.end_pos = end_pos
+
+        return self
+    
+    def set_context(self, context=None):
+        self.context = context
+
+        return self
+    
+    def basic_ops(self, other_num, operation):
+        return None, self.illegal_op(other)
+
+    def comp_ops(self, other_num, comparison):
+        return None, self.illegal_op(other)
+
+    def is_true(self):
+        return False
+
+    def notted(self):
+        return None, self.illegal_op(other)
+
+    def copy_pos(self):
+        raise Exception("No 'copy' method defined")
+    
+    def illegal_op(self, other=None):
+        if not other: other = self
+        return RuntimeError(self.start_pos, self.end_pos, 'Illegal Operation', self.context)
+
+class Num(Value):
     def __init__(self, value):
         self.value = value
         self.set_pos()
@@ -75,10 +113,14 @@ class Num:
             if operation == '^':
                 return Num(eval(f'{self.value} ** {other_num.value}')).set_context(self.context), None
             return Num(eval(f'{self.value} {operation} {other_num.value}')).set_context(self.context), None
+        else:
+            return None, Value.illegal_op(self, other_num)
             
     def comp_ops(self, other_num, comparison):
         if isinstance(other_num, Num):
             return Num(eval(f'{self.value} {comparison} {other_num.value}')).set_context(self.context), None
+        else:
+            return None, Value.illegal_op(self, other_num)
 
     def is_true(self):
         return self.value
@@ -98,6 +140,21 @@ class Num:
     
     def __repr__(self):
         return str(self.value)
+    
+class Function(Value):
+    def __init__(self, name, body, args):
+        self.name = name or '<none>'
+        self.body = body
+        self.args = args
+    
+    def execute(self, args):
+        result = RuntimeResult()
+        interp = Interpreter()
+        context = Context(self.name, self.context, self.start_pos)
+        context.symbol_table = SymbolTable(context.parent.symbol_table)
+
+        
+
 
 #######################################
 # LEXER CLASS
@@ -155,6 +212,8 @@ class Lexer:
             return Token(WT_PLUS, start_pos=self.pos), None
         elif self.curr_char == '-':
             return Token(WT_MINUS, start_pos=self.pos), None
+        elif self.curr_char == ',':
+            return Token(WT_COMMA, start_pos=self.pos), None
         elif self.curr_char == '!':
             tkn, err = self.make_not_equals()
             if err: return [], err
@@ -165,6 +224,7 @@ class Lexer:
             return self.make_lt()
         elif self.curr_char == '>':
             return self.make_gt()
+
         return None, None
     
     def make_not_equals(self):
@@ -186,6 +246,10 @@ class Lexer:
         if self.curr_char == '=':
             self.next_char()
             tkn_type = WT_EQUALS
+        
+        elif self.curr_char == '>':
+            self.next_char()
+            tkn_type = WT_ARROW
         
         return Token(tkn_type, start_pos=start_pos, end_pos=self.pos), None
 
@@ -337,6 +401,34 @@ class WhileNode:
         self.start_pos = self.cond.start_pos
         self.end_pos = self.body.end_pos
 
+class FuncNode:
+    def __init__(self, var_name, args, body):
+        self.var_name = var_name
+        self.args = args
+        self.body = body
+
+        if self.var_name:
+            self.start_pos = self.var_name.start_pos
+        elif len(self.args) > 0:
+            self.start_pos = self.args[0].start_pos
+        else:
+            self.start_pos = body.start_pos
+        
+        self.end_pos = body.end_pos
+
+class CallNode:
+    def __init__(self, called_node, args):
+        self.called_node = called_node
+        self.args = args
+        self.start_pos = self.called_node.start_pos
+
+        if len(self.args) > 0:
+            self.end_pos = self.args[len(self.args) - 1].end_pos
+        else:
+            self.end_pos = self.called_node.end_pos
+
+        
+
 #######################################
 # PARSER HANDLER
 #######################################
@@ -435,19 +527,41 @@ class Parser:
         return self.power()
     
     def power(self):
+        return self.bin_op(self.call, (WT_POW, ), self.num_func)
+    
+    def call(self):
         result = ParseResult()
-        l = result.register(self.pow_func())
+        curr_atom = result.register(self.pow_func())
         if result.err: return result
 
-        while self.curr_tkn.type in (WT_POW, ):
-            tkn = self.curr_tkn
+        if self.curr_tkn.type == WT_LEFTPAR:
             result.register_next()
             self.next()
-            r = result.register(self.num_func())
-            if result.err: return result
-            l = BOpNode(l, tkn, r)
-        
-        return result.success(l)
+            args = []
+
+            if self.curr_tkn.type == WT_RIGHTPAR:
+                result.register_next()
+                self.next()
+            else:
+                args.append(result.register(self.pm_func())
+                if result.err:
+                    return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "')', 'Var', 'For', 'While', 'Func', int, float, identifier, '+', '-', or '(' Expected"))
+
+                while self.curr_tkn.type == WT_COMMA:
+                    result.register_next()
+                    self.next()
+
+                    args.append(result.register(self.pm_func()))
+                    if result.err: return result
+                
+                if self.curr_tkn.type != WT_RIGHTPAR:
+                    return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "',' or ')' Expected"))
+
+                result.register_next()
+                self.next()
+            
+            return result.success(CallNode(curr_atom, args))
+        return result.success(curr_atom)
 
     #atom
     def pow_func(self):
@@ -490,6 +604,11 @@ class Parser:
         
         elif tkn.matches(WT_KEYWORD, 'While'):
             expr = result.register(self.while_expr())
+            if result.err: return result
+            return result.success(expr)
+        
+        elif tkn.matches(WT_KEYWORD, 'Func'):
+            expr = result.register(self.func_dec())
             if result.err: return result
             return result.success(expr)
 
@@ -622,6 +741,68 @@ class Parser:
         if result.err: return result
 
         return result.success(WhileNode(cond, body))
+    
+    def func_dec(self):
+        result = ParseResult()
+
+        if not self.curr_tkn.matches(WT_KEYWORD, 'Func'):
+            return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "'Func' Expected"))
+        
+        result.register_next()
+        self.next()
+
+        if self.curr_tkn.type == WT_IDENTIFIER:
+            var_name = self.curr_tkn
+            result.register_next()
+            self.next()
+            if self.curr_tkn.type != WT_LEFTPAR:
+                return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "'(' Expected"))
+        else:
+            var_name = None
+            result.register_next()
+            self.next()
+            if self.curr_tkn.type != WT_LEFTPAR:
+                return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "Identifier or '(' Expected"))
+
+        result.register_next()
+        self.next()
+        args = []
+
+        if self.curr_tkn == WT_IDENTIFIER:
+            args.append(self.curr_tkn)
+            result.register_next()
+            self.next()
+
+            while self.curr_tkn.type == WT_COMMA:
+                result.register_next()
+                self.next()
+
+                if self.curr_tkn.type != WT_IDENTIFIER:
+                    return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "Identifier Expected"))
+                
+                args.append(self.curr_tkn)
+                result.register_next()
+                self.next()
+            
+            if self.curr_tkn.type != WT_RIGHTPAR:
+                return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "',' or ')' Expected"))
+        else:
+            if self.curr_tkn.type != WT_RIGHTPAR:
+                return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "Identifier or '(' Expected"))
+
+        result.register_next()
+        self.next()
+
+        if self.curr_tkn.type != WT_ARROW:
+            return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "'=>' Expected"))
+        
+        result.register_next()
+        self.next()
+
+        node = result.register(self.pm_func())
+        if result.err: return result
+
+        return result.success(FuncNode(var_name, node, args))
 
     def parse(self):
         result = self.pm_func()
