@@ -28,7 +28,7 @@ DIGITS = '0123456789'
 LETTERS = string.ascii_letters
 KEYWORDS = ['Var', 'And', 'Or', 'Not', 
             'If', 'Then', 'Otherwise', 'Else',
-            'For', 'To', 'Inc', 'Do' 'While']
+            'For', 'To', 'Inc', 'Do', 'While']
 SUPPORTED_CHARS = '()*/+-^=<>!'
 
 class Token:
@@ -565,7 +565,7 @@ class Parser:
         result.register_next()
         self.next()
 
-        if self.curr_tkn != WT_EQ:
+        if self.curr_tkn.type != WT_EQ:
             return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "'=' Expected"))
  
         result.register_next()
@@ -675,7 +675,7 @@ class Interpreter:
         value = context.symbol_table.get(var_name)
 
         if not value:
-            return result.failure(RuntimeError(node.start_pos, node.end_pos, f"'{var_name} is not defined", context))
+            return result.failure(RuntimeError(node.start_pos, node.end_pos, f"'{var_name}' is not defined", context))
         
         value = value.copy_pos().set_pos(node.start_pos, node.end_pos)
         return result.success(value)
@@ -788,16 +788,17 @@ class Interpreter:
         else:
             inc_val = Num(1)
         
-        i = start_val.value
+        i = int(start_val.value)
+        int_end = int(end_val.value)
 
-        if inc_val.value >= 0:
-            cond = lambda: i < end_val.value
+        if int(inc_val.value) >= 0:
+            cond = lambda: i < int_end
         else:
-            cond = lambda: i > end_val.value
+            cond = lambda: i > int_end
         
-        while condition():
+        while cond():
             context.symbol_table.set(node.var_name.value, Num(i))
-            i += inc_val.value
+            i += int(inc_val.value)
 
             result.register(self.visit(node.body, context))
             if result.err: return result
