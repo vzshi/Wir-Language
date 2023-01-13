@@ -152,9 +152,32 @@ class Function(Value):
         interp = Interpreter()
         context = Context(self.name, self.context, self.start_pos)
         context.symbol_table = SymbolTable(context.parent.symbol_table)
-
         
+        if len(args) > len(self.args):
+            return result.failure(RuntimeError(self.start_pos, self.end_pos, f"{len(args) - len(self.args)} less args needed to be passed into '{self.name}'", self.context))
+            
+        elif len(args) < len(self.args):
+            return result.failure(RuntimeError(self.start_pos, self.end_pos, f"{len(self.args) - len(args)} more args needed to be passed into '{self.name}'", self.context))
 
+        for i in range(len(args)):
+            arg_title = self.args[i]
+            arg_val = args[i]
+            arg_val.set_context(context)
+            context.symbol_table.set(arg_title, arg_value)
+        
+        val = result.register(interp.visit(self.body, context))
+        if result.err: return result
+
+        return result.success(val)
+
+    def copy(self):
+        c = Function(self.name, self.body, self.args)
+        c.set_pos(self.start_pos, self.end_pos)
+        c.set_context(self.context)
+        return c
+    
+    def __repr__(self):
+        return f'<Func {self.name}>'
 
 #######################################
 # LEXER CLASS
@@ -504,7 +527,7 @@ class Parser:
         new_node = result.register(self.bin_op(self.comp_func, ((WT_KEYWORD, "And"), (WT_KEYWORD, "Or")), self.comp_func))
 
         if result.err:
-            return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "Expected int, float, identifier, Var, '+', '-', or '('"))
+            return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "Expected int, float, identifier, 'Var', 'If', 'For', 'While', 'Func' '+', '-', or '('"))
 
         return result.success(new_node)
         
@@ -543,7 +566,7 @@ class Parser:
                 result.register_next()
                 self.next()
             else:
-                args.append(result.register(self.pm_func())
+                args.append(result.register(self.pm_func()))
                 if result.err:
                     return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "')', 'Var', 'For', 'While', 'Func', int, float, identifier, '+', '-', or '(' Expected"))
 
@@ -614,7 +637,7 @@ class Parser:
 
         return result.failure(IllegalSyntaxError(
                     tkn.start_pos, tkn.end_pos, 
-                    "Expected int, float, identifier, '+', '-', or '('"
+                    "Expected int, float, identifier, 'If', 'For', 'While', 'Func', '+', '-', or '('"
                     ))
     
     def if_expr(self):
@@ -999,14 +1022,46 @@ class Interpreter:
             if result.err: return result
 
         return result.success(None)
+    
+    def visit_FuncNode(self, node, context):
+        result = RuntimeResult()
+
+        func_name = node.var_name.value if node.var_name else None
+        body = node.body
+        args = [args.value for args in node.args]
+        func_val = Function(func_name, body, args).set_context(context).set_pos(node.start_pos, node.end_pos)
+
+        if node.var_name:
+            context.symbol_table.set(func_name, func_val)
+
+        return result.success(func_val)
+    
+    def visit_CallNode(self, node, context):
+        result = RuntimeResult()
+        args = []
+
+        vals_calling = result.register(self.visit(node.called_node, context))
+        if result.err: return result
+        vals_calling = vals_calling.copy_pos().set_pos(node.start_pos, node.end_pos)
+
+        for arg in node.args:
+            args.append(result.register(self.visit(arg, context)))
+            if result.err: return result
+
+        ret_val = result.register(vals_calling.execute(args))
+        if result.err: return result
+
+        return result.success(ret_val)
+
 
 #######################################
 # SYMBOL TABLE CLASS
 #######################################
 
 class SymbolTable:
-    def __init__(self):
+    def __init__(self, parent=None):
         self.symbols = {}
+        self.parent = parent
 
         #keeps track of global symbol table
         self.parent = None
