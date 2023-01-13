@@ -26,7 +26,8 @@ WT_GTE = 'GTE'
 
 DIGITS = '0123456789'
 LETTERS = string.ascii_letters
-KEYWORDS = ['Var', 'And', 'Or', 'Not']
+KEYWORDS = ['Var', 'And', 'Or', 'Not', 
+            'If', 'Then', 'Otherwise', 'Else']
 SUPPORTED_CHARS = '()*/+-^=<>!'
 
 class Token:
@@ -77,6 +78,9 @@ class Num:
     def comp_ops(self, other_num, comparison):
         if isinstance(other_num, Num):
             return Num(eval(f'{self.value} {comparison} {other_num.value}')).set_context(self.context), None
+
+    def is_true(self):
+        return self.value
 
     def notted(self):
         return Num(True if self.value == '0' or self.value == 0 else False).set_context(self.context), None
@@ -164,47 +168,47 @@ class Lexer:
     
     def make_not_equals(self):
         start_pos = self.pos.copy_pos()
-        self.next()
+        self.next_char()
 
         if self.curr_char == '=':
-            self.next()
+            self.next_char()
             return Token(WT_NE, start_pos=start_pos, end_pos=self.pos), None
         
-        self.next()
+        self.next_char()
         return None, ExpectedCharError(start_pos, self.pos, "'=' Expected (after '!')")
 
     def make_equals(self):
         tkn_type = WT_EQ
         start_pos = self.pos.copy_pos()
-        self.next()
+        self.next_char()
 
         if self.curr_char == '=':
-            self.next()
+            self.next_char()
             tkn_type = WT_EQUALS
         
-        return Token(tkn_type, start_pos=start_pos, end_pos=end_pos), None
+        return Token(tkn_type, start_pos=start_pos, end_pos=self.pos), None
 
     def make_lt(self):
         tkn_type = WT_LT
         start_pos = self.pos.copy_pos()
-        self.next()
+        self.next_char()
 
         if self.curr_char == '=':
-            self.next()
+            self.next_char()
             tkn_type = WT_LTE
         
-        return Token(tkn_type, start_pos=start_pos, end_pos=end_pos), None
+        return Token(tkn_type, start_pos=start_pos, end_pos=self.pos), None
 
     def make_gt(self):
         tkn_type = WT_GT
         start_pos = self.pos.copy_pos()
-        self.next()
+        self.next_char()
 
         if self.curr_char == '=':
-            self.next()
+            self.next_char()
             tkn_type = WT_GTE
         
-        return Token(tkn_type, start_pos=start_pos, end_pos=end_pos), None
+        return Token(tkn_type, start_pos=start_pos, end_pos=self.pos), None
 
     def make_num_tkn(self):
         num = ''
@@ -308,6 +312,12 @@ class AccessVNode:
         self.start_pos = self.var_name_tkn.start_pos
         self.end_pos = self.var_name_tkn.end_pos
 
+class IfNode:
+    def __init__(self, cases, else_case):
+        self.cases = cases
+        self.else_case = else_case
+        self.start_pos = self.cases[0][0].start_pos
+        self.end_pos = (self.else_case or self.cases[len(self.cases) - 1][0]).end_pos
 
 #######################################
 # PARSER HANDLER
@@ -450,15 +460,70 @@ class Parser:
                     self.curr_tkn.start_pos, self.curr_tkn.end_pos, 
                     "Expected ')'"
                     ))
+        elif tkn.matches(WT_KEYWORD, 'If'):
+            expr = result.register(self.if_expr())
+            if result.err: return result
+            return result.success(expr)
 
         return result.failure(IllegalSyntaxError(
                     tkn.start_pos, tkn.end_pos, 
                     "Expected int, float, identifier, '+', '-', or '('"
                     ))
+    
+    def if_expr(self):
+        result = ParseResult()
+        total_cases = []
+        else_case = None
+
+        if not self.curr_tkn.matches(WT_KEYWORD, 'If'):
+            return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "'If' Expected"))
+        
+        result.register_next()
+        self.next()
+
+        cond = result.register(self.pm_func())
+        if result.err: return result
+
+        if not self.curr_tkn.matches(WT_KEYWORD,'Then'):
+            return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "'Then' Expected"))
+
+        result.register_next()
+        self.next()
+
+        expr = result.register(self.pm_func())
+        if result.err: return result
+        total_cases.append((cond, expr))
+
+        while self.curr_tkn.matches(WT_KEYWORD, 'Otherwise'):
+            result.register_next()
+            self.next()
+
+            cond = result.register(self.pm_func())
+            if result.err: return result
+
+            if not self.curr_tkn.matches(WT_KEYWORD, 'Then'):
+                return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "'Then' Expected"))
+
+            result.register_next()
+            self.next()
+
+            expr = result.register(self.pm_func())
+            if result.err: return result
+            total_cases.append((cond, expr))
+        
+        if self.curr_tkn.matches(WT_KEYWORD, 'Else'):
+            result.register_next()
+            self.next()
+
+            expr = result.register(self.pm_func())
+            if result.err: return result
+            else_case = expr
+        
+        return result.success(IfNode(total_cases, else_case))
 
     def parse(self):
         result = self.pm_func()
-        if not result.err and self.curr_tkn.type is not WT_EOF:
+        if not result.err and self.curr_tkn.type != WT_EOF:
             result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "Expected '+', '-', '*', or '/'"))
         return result
 
@@ -557,7 +622,7 @@ class Interpreter:
             result, err = l.comp_ops(r, '>')
         elif node.op_tkn.type == WT_LTE:
             result, err = l.comp_ops(r, '<=')
-        elif node.op_tkn.type == WT_EQUALS:
+        elif node.op_tkn.type == WT_GTE:
             result, err = l.comp_ops(r, '>=')
         elif node.op_tkn.matches(WT_KEYWORD, 'And'):
             result, err = l.comp_ops(r, 'and')
@@ -587,6 +652,25 @@ class Interpreter:
         else:
             return rs.success(number.set_pos(node.start_pos, node.end_pos))
 
+    def visit_IfNode(self, node, context):
+        result = RuntimeResult()
+
+        for cond, expr in node.cases:
+            cond_val = result.register(self.visit(cond, context))
+            if result.err: return result
+
+            if cond_val.is_true():
+                expr_val = result.register(self.visit(expr, context))
+                if result.err: return result
+                return result.success(expr_val)
+
+        if node.else_case:
+            else_val = result.register(self.visit(node.else_case, context))
+            if result.err: return result
+            return result.success(else_val)
+        
+        return result.success(None)
+
 #######################################
 # SYMBOL TABLE CLASS
 #######################################
@@ -615,7 +699,9 @@ class SymbolTable:
 #######################################
 
 global_sym_table = SymbolTable()
-global_sym_table.set("null", Num(0))
+global_sym_table.set("Null", Num(0))
+global_sym_table.set("True", Num(1))
+global_sym_table.set("False", Num(0))
 
 def run_program(file_name, text):
     new_lexer = Lexer(file_name, text)
