@@ -144,29 +144,23 @@ class Num(Value):
     def __repr__(self):
         return str(self.value)
     
-class Function(Value):
-    def __init__(self, name, body, args):
-        self.name = name or '<none>'
+Num.null = Num(0)
+Num.true = Num(1)
+Num.false = Num(0)
+
+class Function(BaseFunction):
+    def __init__(self, name, body, arg_names):
+        super().__init__(name)
         self.body = body
-        self.args = args
+        self.arg_names = arg_names
     
     def execute(self, args):
         result = RuntimeResult()
         interp = Interpreter()
-        context = Context(self.name, self.context, self.start_pos)
-        context.symbol_table = SymbolTable(context.parent.symbol_table)
+        context = self.gen_new_context()
         
-        if len(args) > len(self.args):
-            return result.failure(RuntimeError(self.start_pos, self.end_pos, f"{len(args) - len(self.args)} less args needs to be passed into '{self.name}'", self.context))
-            
-        elif len(args) < len(self.args):
-            return result.failure(RuntimeError(self.start_pos, self.end_pos, f"{len(self.args) - len(args)} more args needs to be passed into '{self.name}'", self.context))
-
-        for i in range(len(args)):
-            arg_title = self.args[i]
-            arg_val = args[i]
-            arg_val.set_context(context)
-            context.symbol_table.set(arg_title, arg_val)
+        result.register(self.check_and_pop_args(self.arg_names, args, context))
+        if result.err: return result
         
         val = result.register(interp.visit(self.body, context))
         if result.err: return result
@@ -174,13 +168,49 @@ class Function(Value):
         return result.success(val)
 
     def copy_pos(self):
-        c = Function(self.name, self.body, self.args)
+        c = Function(self.name, self.body, self.arg_names)
         c.set_pos(self.start_pos, self.end_pos)
         c.set_context(self.context)
         return c
     
     def __repr__(self):
         return f'<Func {self.name}>'
+
+class BaseFunction(Value):
+    def __init__(self, name):
+        super().__init__()
+        self.name = name or '<none>'
+
+    def gen_new_context(self):
+        new_con = Context(self.name, self.context, self.start_pos)
+        new_con.symbol_table = SymbolTable(new_con.parent.symbol_table)
+        return new_con
+    
+    def check_num_args(self, arg_names, args):
+        result = RuntimeResult()
+
+        if len(args) > len(arg_names):
+            return result.failure(RuntimeError(self.start_pos, self.end_pos, f"{len(args) - len(arg_names)} less args needs to be passed into '{self.name}'", self.context))
+            
+        elif len(args) < len(arg_names):
+            return result.failure(RuntimeError(self.start_pos, self.end_pos, f"{len(arg_names) - len(args)} more args needs to be passed into '{self.name}'", self.context))
+
+        return result.success(None)
+
+    def popu_args(self, arg_names, args, top_cont):
+        for i in range(len(args)):
+            arg_title = args_names[i]
+            arg_val = args[i]
+            arg_val.set_context(top_cont)
+            top_cont.symbol_table.set(arg_title, arg_val)
+
+    def check_and_pop_args(self, arg_names, args, top_cont):
+        result = RuntimeResult()
+        result.register(self.check_num_args(arg_names, args))
+        if result.err: return result
+
+        self.popu_args(arg_names, args, top_cont)
+        return result.success(None)
     
 class String(Value):
     def __init__(self, value):
@@ -1257,9 +1287,9 @@ class SymbolTable:
 #######################################
 
 global_sym_table = SymbolTable()
-global_sym_table.set("Null", Num(0))
-global_sym_table.set("True", Num(1))
-global_sym_table.set("False", Num(0))
+global_sym_table.set("Null", Num.null)
+global_sym_table.set("True", Num.true)
+global_sym_table.set("False", Num.false)
 
 def run_program(file_name, text):
     new_lexer = Lexer(file_name, text)
