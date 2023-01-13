@@ -1,4 +1,6 @@
 import string
+import os
+import math
 
 #######################################
 # TOKEN CLASS
@@ -147,36 +149,9 @@ class Num(Value):
 Num.null = Num(0)
 Num.true = Num(1)
 Num.false = Num(0)
+Num.pi = Num(math.pi)
 
-class Function(BaseFunction):
-    def __init__(self, name, body, arg_names):
-        super().__init__(name)
-        self.body = body
-        self.arg_names = arg_names
-    
-    def execute(self, args):
-        result = RuntimeResult()
-        interp = Interpreter()
-        context = self.gen_new_context()
-        
-        result.register(self.check_and_pop_args(self.arg_names, args, context))
-        if result.err: return result
-        
-        val = result.register(interp.visit(self.body, context))
-        if result.err: return result
-
-        return result.success(val)
-
-    def copy_pos(self):
-        c = Function(self.name, self.body, self.arg_names)
-        c.set_pos(self.start_pos, self.end_pos)
-        c.set_context(self.context)
-        return c
-    
-    def __repr__(self):
-        return f'<Func {self.name}>'
-
-class BaseFunction(Value):
+class FunctionSkeleton(Value):
     def __init__(self, name):
         super().__init__()
         self.name = name or '<none>'
@@ -211,7 +186,177 @@ class BaseFunction(Value):
 
         self.popu_args(arg_names, args, top_cont)
         return result.success(None)
+
+class BuiltInFunction(FunctionSkeleton):
+    def __init__(self, name):
+        super().__init__(name)
+
+    def run(self, args):
+        result = RuntimeResult()
+        top_cont = self.gen_new_context()
+
+        func_name = f'run_{self.name}'
+        func = getattr(self, func_name, self.no_visit)
+
+        result.register(self.check_and_pop_args(func.arg_names, args, top_cont))
+        if result.err: return result
+
+        ret_val = result.register(method(top_cont))
+        if result.err: return result
+
+        return result.success(ret_val)
     
+    def no_visit(self, node, context):
+        raise Exception("No run_{self.name} method found")
+    
+    def copy_pos(self):
+        c = BuiltInFunction(self.name)
+        c.set_pos(self.start_pos, self.end_pos)
+        c.set_context(self.context)
+        return c
+
+    def __repr__(self):
+        return f"<Built-In Func {self.name}"
+    
+    def run_print(self, top_cont):
+        print(str(top_cont.symbol_table.get('value')))
+        return RuntimeResult().success(Num.null)
+    run_print.arg_names = ['value']
+
+    def run_print_and_ret(self, top_cont):
+        return RuntimeResult().success(String(str(top_cont.symbol_table.get('value'))))
+    run_print.arg_names = ['value']
+
+    def run_input(self, top_cont):
+        text = input()
+        return RuntimeResult().success(String(text))
+    run_input.arg_names = []
+
+    def run_input(self, top_cont):
+        text = input()
+        return RuntimeResult().success(String(text))
+    run_input.arg_names = []
+
+    def run_input_to_int(self, top_cont):
+        while True:
+            text = input()
+            try:
+                num = int(text)
+                break
+            except ValueError:
+                print(f"'{text}' must be an integer")
+        return RuntimeResult().success(Num(num))
+    run_input.arg_names = []
+
+    def run_clear(self, top_cont):
+        os.system('clear')
+        return RuntimeResult().success(Num.null)
+    run_clear.arg_names = []
+
+    def run_is_num(self, top_cont):
+        is_num = isinstance(top_cont.symbol_table.get("value"), Num)
+        return RuntimeResult().success(Num.true if is_num else Num.false)
+    run_is_num.arg_names = ["value"]
+
+    def run_is_str(self, top_cont):
+        is_str = isinstance(top_cont.symbol_table.get("value"), String)
+        return RuntimeResult().success(Num.true if is_str else Num.false)
+    run_is_str.arg_names = ["value"]
+
+    def run_is_lst(self, top_cont):
+        is_lst = isinstance(top_cont.symbol_table.get("value"), List)
+        return RuntimeResult().success(Num.true if is_lst else Num.false)
+    run_is_lst.arg_names = ["value"]
+
+    def run_is_func(self, top_cont):
+        is_func = isinstance(top_cont.symbol_table.get("value"), FunctionSkeleton)
+        return RuntimeResult().success(Num.true if is_func else Num.false)
+    run_is_func.arg_names = ["value"]
+
+    def run_append(self, top_cont):
+        lst = top_cont.symbol_table.get('list')
+        val = top_cont.symbol_table.get('value')
+
+        if not isinstance(lst, List):
+            return RuntimeResult().failure(RuntimeError(self.start_pos, self.end_pos, "First argument must be type List"), top_cont)
+        
+        lst.elements.append(value)
+        return RuntimeResult().success(Num.null)
+    run_append.arg_names = ['list', 'value']
+
+    def run_append(self, top_cont):
+        lst = top_cont.symbol_table.get('list')
+        ind = top_cont.symbol_table.get('index')
+
+        if not isinstance(lst, List):
+            return RuntimeResult().failure(RuntimeError(self.start_pos, self.end_pos, "First argument must be type List"), top_cont)
+        
+        if not isinstance(ind, Num):
+            return RuntimeResult().failure(RuntimeError(self.start_pos, self.end_pos, "Second argument must be type Num"), top_cont)
+        
+        try:
+            popped = lst.elements.pop(int(ind.value))
+        except:
+            return RuntimeResult().failure(RuntimeError(self.start_pos, self.end_pos, 'Index is out of bounds'), top_cont)
+
+        return RuntimeResult().success(popped)
+    run_append.arg_names = ['list', 'index']
+
+    def run_extend(self, top_cont):
+        lst1 = top_cont.symbol_table.get("lst1")
+        lst2 = top_cont.symbol_table.get("lst2")
+
+        if not isinstance(lst1, List):
+            return RuntimeResult().failure(RuntimeError(self.start_pos, self.end_pos, "First argument must be type List"), top_cont)
+        
+        if not isinstance(lst2, List):
+            return RuntimeResult().failure(RuntimeError(self.start_pos, self.end_pos, "Second argument must be type List"), top_cont)
+        
+        lst1.elements.extend(lst2.elements)
+        return RuntimeResult().success(Num.null)
+    run_extend.arg_names = ['lst1', 'lst2']
+
+BuiltInFunction.print = BuiltInFunction('print')
+BuiltInFunction.print_and_ret = BuiltInFunction('print_and_ret')
+BuiltInFunction.input = BuiltInFunction('input')
+BuiltInFunction.input_to_int = BuiltInFunction('input_to_int')
+BuiltInFunction.clear = BuiltInFunction('clear')
+BuiltInFunction.is_num = BuiltInFunction('is_num')
+BuiltInFunction.is_str = BuiltInFunction('is_str')
+BuiltInFunction.is_lst = BuiltInFunction('is_lst')
+BuiltInFunction.is_func = BuiltInFunction('is_func')
+BuiltInFunction.append = BuiltInFunction('append')
+BuiltInFunction.pop = BuiltInFunction('pop')
+BuiltInFunction.extend = BuiltInFunction('extend')
+
+class Function(FunctionSkeleton):
+    def __init__(self, name, body, arg_names):
+        super().__init__(name)
+        self.body = body
+        self.arg_names = arg_names
+    
+    def run(self, args):
+        result = RuntimeResult()
+        interp = Interpreter()
+        context = self.gen_new_context()
+        
+        result.register(self.check_and_pop_args(self.arg_names, args, context))
+        if result.err: return result
+        
+        val = result.register(interp.visit(self.body, context))
+        if result.err: return result
+
+        return result.success(val)
+
+    def copy_pos(self):
+        c = Function(self.name, self.body, self.arg_names)
+        c.set_pos(self.start_pos, self.end_pos)
+        c.set_context(self.context)
+        return c
+    
+    def __repr__(self):
+        return f'<Func {self.name}>'
+
 class String(Value):
     def __init__(self, value):
         super().__init__()
@@ -273,7 +418,7 @@ class List(Value):
                 None, Value.illegal_op(self, other)
     
     def copy_pos(self):
-        c = List(self.elements[:])
+        c = List(self.elements)
         c.set_pos(self.start_pos, self.end_pos)
         c.set_context(self.context)
         return c
@@ -1070,7 +1215,7 @@ class Interpreter:
         if not value:
             return result.failure(RuntimeError(node.start_pos, node.end_pos, f"'{var_name}' is not defined", context))
         
-        value = value.copy_pos().set_pos(node.start_pos, node.end_pos)
+        value = value.copy_pos().set_context(context).set_pos(node.start_pos, node.end_pos)
         return result.success(value)
     
     def visit_AssignVNode(self, node, context):
@@ -1239,9 +1384,10 @@ class Interpreter:
             args.append(result.register(self.visit(arg, context)))
             if result.err: return result
 
-        ret_val = result.register(vals_calling.execute(args))
+        ret_val = result.register(vals_calling.run(args))
         if result.err: return result
 
+        ret_val = ret_val.copy().set_pos(node.start_pos, node.end_pos).set_context(context)
         return result.success(ret_val)
     
     def visit_StringNode(self, node, context):
@@ -1290,6 +1436,19 @@ global_sym_table = SymbolTable()
 global_sym_table.set("Null", Num.null)
 global_sym_table.set("True", Num.true)
 global_sym_table.set("False", Num.false)
+global_sym_table.set("Pi", Num.pi)
+global_sym_table.set("Print", BuiltInFunction.print)
+global_sym_table.set("PrintRet", BuiltInFunction.print_and_ret)
+global_sym_table.set("Input", BuiltInFunction.input)
+global_sym_table.set("ToInt", BuiltInFunction.input_to_int)
+global_sym_table.set("Clear", BuiltInFunction.clear)
+global_sym_table.set("IsNum", BuiltInFunction.is_num)
+global_sym_table.set("IsStr", BuiltInFunction.is_str)
+global_sym_table.set("IsList", BuiltInFunction.is_lst)
+global_sym_table.set("IsFunc", BuiltInFunction.is_func)
+global_sym_table.set("Append", BuiltInFunction.append)
+global_sym_table.set("Pop", BuiltInFunction.pop)
+global_sym_table.set("Extend", BuiltInFunction.extend)
 
 def run_program(file_name, text):
     new_lexer = Lexer(file_name, text)
