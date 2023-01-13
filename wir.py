@@ -25,6 +25,7 @@ WT_LTE = 'LTE'
 WT_GTE = 'GTE'
 WT_COMMA = 'COMMA'
 WT_ARROW = 'ARROW'
+WT_STRING = 'STRING'
 
 DIGITS = '0123456789'
 LETTERS = string.ascii_letters
@@ -178,6 +179,33 @@ class Function(Value):
     
     def __repr__(self):
         return f'<Func {self.name}>'
+    
+class String(Value):
+    def __init__(self, value):
+        super().__init__()
+        self.value = value
+    
+    def concatenate(self, other_str):
+        if isinstance(other_str, String):
+            return String(self.value + other_str.value).set_context(self.context), None
+        return None, Value.illegal_op(self, other_str)
+    
+    def repeat(self, other_num):
+        if isinstance(other_num, Num):
+            return String(self.value * int(other_num.value)).set_context(self.context), None
+        return None, Value.illegal_op(self, other_num)
+    
+    def is_true(self):
+        return len(self.value) > 0
+
+    def copy_pos(self):
+        c = String(self.value)
+        c.set_pos(self.start_pos, self.end_pos)
+        c.set_context(self.context)
+        return c
+    
+    def __repr__(self):
+        return f'"{self.value}"'
 
 #######################################
 # LEXER CLASS
@@ -211,6 +239,8 @@ class Lexer:
                 tkns.append(self.make_num_tkn())
             elif self.curr_char in LETTERS:
                 tkns.append(self.make_identifier())
+            elif self.curr_char == '"':
+                tkns.append(self.make_string_tkn())
             else:
                 start_pos = self.pos.copy_pos()
                 unknown = self.curr_char
@@ -219,6 +249,28 @@ class Lexer:
         
         tkns.append(Token(WT_EOF, start_pos=self.pos))
         return tkns, None
+
+    def make_string_tkn(self):
+        string = ''
+        start_pos = self.pos.copy_pos()
+        esc_char = False
+        self.next()
+
+        esc_chars = {'n': '\n', 't': '\t'}
+
+        while self.curr_char is not None and (self.curr_char != '"' or esc_char):
+            if esc_char:
+                string += esc_chars.get(self.curr_char, self.curr_char)
+            else:
+                if self.curr_char == '\\':
+                    esc_char = True
+                else:
+                    string += self.curr_char
+            self.next()
+            esc_char = False
+
+        self.next()
+        return Token(WT_STRING, string, start_pos, self.pos)
 
     def make_op_tkn(self):
         if self.curr_char == '(':
@@ -358,6 +410,15 @@ class LinePosition:
 #######################################
 
 class NumNode:
+    def __init__(self, num_tkn):
+        self.num_tkn = num_tkn
+        self.start_pos = self.num_tkn.start_pos
+        self.end_pos = self.num_tkn.end_pos
+    
+    def __repr__(self):
+        return f'{self.num_tkn}'
+
+class StringNode:
     def __init__(self, num_tkn):
         self.num_tkn = num_tkn
         self.start_pos = self.num_tkn.start_pos
@@ -595,6 +656,11 @@ class Parser:
             result.register_next()
             self.next()
             return result.success(NumNode(tkn))
+
+        elif self.curr_tkn.type == WT_STRING:
+            result.register_next()
+            self.next()
+            return result.success(StringNode(tkn))
 
         elif tkn.type == WT_IDENTIFIER:
             result.register_next()
@@ -1050,6 +1116,9 @@ class Interpreter:
         if result.err: return result
 
         return result.success(ret_val)
+    
+    def visit_StringNode(self, node, context):
+        return RuntimeResult().success(String(node.tkn.value).set_context(context).set_pos(node.start_pos, node.end_pos))
 
 
 #######################################
