@@ -8,6 +8,8 @@ WT_INT = 'INT'
 WT_FLOAT = 'FLOAT'
 WT_LEFTPAR = 'LEFTPAR'
 WT_RIGHTPAR = 'RIGHTPAR'
+WT_LEFTBRACKET = 'LEFTBRACKET'
+WT_RIGHTBRACKET = 'RIGHTBRACKET'
 WT_POW = 'POW'
 WT_MUL = 'MUL'
 WT_DIV = 'DIV'
@@ -33,7 +35,7 @@ KEYWORDS = ['Var', 'And', 'Or', 'Not',
             'If', 'Then', 'Otherwise', 'Else',
             'For', 'To', 'Inc', 'Do', 'While', 
             'Func']
-SUPPORTED_CHARS = '()*/+-^=<>!,'
+SUPPORTED_CHARS = '()*/+-^=<>!,[]'
 
 class Token:
     def __init__(self, wir_type, value=None, start_pos=None, end_pos=None):
@@ -77,16 +79,16 @@ class Value:
 
         return self
     
-    def basic_ops(self, other_num, operation):
+    def basic_ops(self, other, operation):
         return None, self.illegal_op(other)
 
-    def comp_ops(self, other_num, comparison):
+    def comp_ops(self, other, comparison):
         return None, self.illegal_op(other)
 
     def is_true(self):
         return False
 
-    def notted(self):
+    def notted(self, other=None):
         return None, self.illegal_op(other)
 
     def copy_pos(self):
@@ -185,15 +187,12 @@ class String(Value):
         super().__init__()
         self.value = value
     
-    def concatenate(self, other_str):
-        if isinstance(other_str, String):
-            return String(self.value + other_str.value).set_context(self.context), None
-        return None, Value.illegal_op(self, other_str)
-    
-    def repeat(self, other_num):
-        if isinstance(other_num, Num):
-            return String(self.value * int(other_num.value)).set_context(self.context), None
-        return None, Value.illegal_op(self, other_num)
+    def basic_ops(self, other, operation):
+        if isinstance(other, String) and operation == '+':
+            return String(self.value + other.value).set_context(self.context), None
+        elif isinstance(other, Num) and operation == '*':
+            return String(self.value * int(other.value)).set_context(self.context), None
+        return None, Value.illegal_op(self, other)
     
     def is_true(self):
         return len(self.value) > 0
@@ -206,6 +205,51 @@ class String(Value):
     
     def __repr__(self):
         return f'"{self.value}"'
+
+class List(Value):
+    def __init__(self, elements):
+        super().__init__()
+        self.elements = elements
+    
+    def basic_ops(self, other, operation):
+        if operation == '+':
+            copy_lst = self.copy_pos()
+            copy_lst.elements.append(other)
+            return copy_lst, None
+        elif operation == '-':
+            if isinstance(other, Number):
+                copy_lst = self.copy_pos()
+                try:
+                    copy_lst.elements.pop(int(other.value))
+                except:
+                    return None, RuntimeError(other.start_pos, other.end_pos, "Given index is out of bounds", self.context)
+            else:
+                None, Value.illegal_op(self, other)
+        elif operation == '*':
+            if isinstance(other, List):
+                copy_lst = self.copy_pos()
+                copy_lst.elements.extend(other.elements)
+                return copy_lst, None
+            else:
+                return None, Value.illegal_op(self, other)
+        elif operation == '^':
+            if isinstance(other, Num):
+                copy_lst = self.copy_pos()
+                try:
+                    return copy_lst.elements[int(other.value)], None
+                except:
+                    return None, RuntimeError(other.start_pos, other.end_pos, "Given index is out of bounds", self.context)
+            else:
+                None, Value.illegal_op(self, other)
+    
+    def copy_pos(self):
+        c = List(self.elements[:])
+        c.set_pos(self.start_pos, self.end_pos)
+        c.set_context(self.context)
+        return c
+    
+    def __repr__(self):
+        return f'[{", ".join([str(el) for el in self.elements])}]'
 
 #######################################
 # LEXER CLASS
@@ -254,22 +298,22 @@ class Lexer:
         string = ''
         start_pos = self.pos.copy_pos()
         esc_char = False
-        self.next()
+        self.next_char()
 
         esc_chars = {'n': '\n', 't': '\t'}
 
         while self.curr_char is not None and (self.curr_char != '"' or esc_char):
             if esc_char:
                 string += esc_chars.get(self.curr_char, self.curr_char)
+                esc_char = False
             else:
                 if self.curr_char == '\\':
                     esc_char = True
                 else:
                     string += self.curr_char
-            self.next()
-            esc_char = False
+            self.next_char()
 
-        self.next()
+        self.next_char()
         return Token(WT_STRING, string, start_pos, self.pos)
 
     def make_op_tkn(self):
@@ -277,6 +321,10 @@ class Lexer:
             return Token(WT_LEFTPAR, start_pos=self.pos), None
         elif self.curr_char == ')':
             return Token(WT_RIGHTPAR, start_pos=self.pos), None
+        elif self.curr_char == '[':
+            return Token(WT_LEFTBRACKET, start_pos=self.pos), None
+        elif self.curr_char == ']':
+            return Token(WT_RIGHTBRACKET, start_pos=self.pos), None
         elif self.curr_char == '^':
             return Token(WT_POW, start_pos=self.pos), None
         elif self.curr_char == '*':
@@ -419,13 +467,19 @@ class NumNode:
         return f'{self.num_tkn}'
 
 class StringNode:
-    def __init__(self, num_tkn):
-        self.num_tkn = num_tkn
-        self.start_pos = self.num_tkn.start_pos
-        self.end_pos = self.num_tkn.end_pos
+    def __init__(self, str_tkn):
+        self.str_tkn = str_tkn
+        self.start_pos = self.str_tkn.start_pos
+        self.end_pos = self.str_tkn.end_pos
     
     def __repr__(self):
         return f'{self.num_tkn}'
+
+class ListNode:
+    def __init__(self, elements, start_pos, end_pos):
+        self.elements = elements
+        self.start_pos = start_pos
+        self.end_pos = end_pos
     
 class BOpNode:
     def __init__(self, left, op_tkn, right):
@@ -547,6 +601,7 @@ class Parser:
     
     def comp_func(self):
         result = ParseResult()
+
         if self.curr_tkn.matches(WT_KEYWORD, 'Not'):
             operation_tkn = self.curr_tkn
             result.register_next()
@@ -558,7 +613,7 @@ class Parser:
         node = result.register(self.bin_op(self.arith_func, (WT_EQUALS, WT_NE, WT_LT, WT_GT, WT_LTE, WT_GTE), self.arith_func))
     
         if result.err:
-            return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "Expected int, float, identifier, 'Not', '+', '-', or '('"))
+            return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "Expected int, float, identifier, 'Not', '+', '-', '[', or '('"))
 
         return result.success(node)
 
@@ -588,7 +643,7 @@ class Parser:
         new_node = result.register(self.bin_op(self.comp_func, ((WT_KEYWORD, "And"), (WT_KEYWORD, "Or")), self.comp_func))
 
         if result.err:
-            return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "Expected int, float, identifier, 'Var', 'If', 'For', 'While', 'Func' '+', '-', or '('"))
+            return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "Expected int, float, identifier, 'Var', 'If', 'For', 'While', 'Func' '+', '-', '[', or '('"))
 
         return result.success(new_node)
         
@@ -629,7 +684,7 @@ class Parser:
             else:
                 args.append(result.register(self.pm_func()))
                 if result.err:
-                    return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "')', 'Var', 'For', 'While', 'Func', int, float, identifier, '+', '-', or '(' Expected"))
+                    return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "')', 'Var', 'For', 'While', 'Func', int, float, identifier, '+', '-', '[', or '(' Expected"))
 
                 while self.curr_tkn.type == WT_COMMA:
                     result.register_next()
@@ -681,6 +736,12 @@ class Parser:
                     self.curr_tkn.start_pos, self.curr_tkn.end_pos, 
                     "Expected ')'"
                     ))
+                
+        elif tkn.type == WT_LEFTBRACKET:
+            lst = result.register(self.list_func())
+            if result.err: return result
+            return result.success(lst)
+
         elif tkn.matches(WT_KEYWORD, 'If'):
             expr = result.register(self.if_expr())
             if result.err: return result
@@ -703,7 +764,7 @@ class Parser:
 
         return result.failure(IllegalSyntaxError(
                     tkn.start_pos, tkn.end_pos, 
-                    "Expected int, float, identifier, 'If', 'For', 'While', 'Func', '+', '-', or '('"
+                    "Expected int, float, identifier, 'If', 'For', 'While', 'Func', '+', '-', '[' or '('"
                     ))
     
     def if_expr(self):
@@ -890,6 +951,40 @@ class Parser:
         if result.err: return result
 
         return result.success(FuncNode(var_name, args, node))
+    
+    def list_func(self):
+        result = ParseResult()
+        elements = []
+        start_pos = self.curr_tkn.start_pos.copy_pos()
+
+        if self.curr_tkn.type != WT_LEFTBRACKET:
+            return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "'[' Expected"))
+
+        result.register_next()
+        self.next()
+
+        if self.curr_tkn.type == WT_RIGHTBRACKET:
+            result.register_next()
+            self.next()
+        else:
+            elements.append(result.register(self.pm_func()))
+            if result.err:
+                return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "'[', 'Var', 'For', 'While', 'Func', int, float, identifier, '+', '-', or '(' Expected"))
+
+            while self.curr_tkn.type == WT_COMMA:
+                result.register_next()
+                self.next()
+
+                elements.append(result.register(self.pm_func()))
+                if result.err: return result
+            
+            if self.curr_tkn.type != WT_RIGHTBRACKET:
+                return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "',' or ']' Expected"))
+
+            result.register_next()
+            self.next()
+        
+        return result.success(ListNode(elements, start_pos, self.curr_tkn.end_pos.copy_pos()))
 
     def parse(self):
         result = self.pm_func()
@@ -1043,6 +1138,7 @@ class Interpreter:
     
     def visit_ForNode(self, node, context):
         result = RuntimeResult()
+        elements = []
 
         start_val = result.register(self.visit(node.start_val, context))
         if result.err: return result
@@ -1068,13 +1164,14 @@ class Interpreter:
             context.symbol_table.set(node.var_name.value, Num(i))
             i += int(inc_val.value)
 
-            result.register(self.visit(node.body, context))
+            elements.append(result.register(self.visit(node.body, context)))
             if result.err: return result
         
-        return result.success(None)
+        return result.success(List(elements).set_context(context).set_pos(node.start_pos, node.end_pos))
 
     def visit_WhileNode(self, node, context):
         result = RuntimeResult()
+        elements = []
 
         while True:
             cond = result.register(self.visit(node.cond, context))
@@ -1082,10 +1179,10 @@ class Interpreter:
 
             if not cond.is_true(): break
 
-            result.register(self.visit(node.body, context))
+            elements.append(result.register(self.visit(node.body, context)))
             if result.err: return result
 
-        return result.success(None)
+        return result.success(List(elements).set_context(context).set_pos(node.start_pos, node.end_pos))
     
     def visit_FuncNode(self, node, context):
         result = RuntimeResult()
@@ -1118,7 +1215,17 @@ class Interpreter:
         return result.success(ret_val)
     
     def visit_StringNode(self, node, context):
-        return RuntimeResult().success(String(node.tkn.value).set_context(context).set_pos(node.start_pos, node.end_pos))
+        return RuntimeResult().success(String(node.str_tkn.value).set_context(context).set_pos(node.start_pos, node.end_pos))
+
+    def visit_ListNode(self, node, context):
+        result = RuntimeResult()
+        elements = []
+
+        for el in node.elements:
+            elements.append(result.register(self.visit(el, context)))
+            if result.err: return result
+        
+        return result.success(List(elements).set_context(context).set_pos(node.start_pos, node.end_pos))
 
 
 #######################################
