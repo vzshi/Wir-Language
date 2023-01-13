@@ -32,7 +32,7 @@ KEYWORDS = ['Var', 'And', 'Or', 'Not',
             'If', 'Then', 'Otherwise', 'Else',
             'For', 'To', 'Inc', 'Do', 'While', 
             'Func']
-SUPPORTED_CHARS = '()*/+-^=<>!'
+SUPPORTED_CHARS = '()*/+-^=<>!,'
 
 class Token:
     def __init__(self, wir_type, value=None, start_pos=None, end_pos=None):
@@ -89,7 +89,7 @@ class Value:
         return None, self.illegal_op(other)
 
     def copy_pos(self):
-        raise Exception("No 'copy' method defined")
+        raise Exception("No 'copy_pos' method defined")
     
     def illegal_op(self, other=None):
         if not other: other = self
@@ -154,23 +154,23 @@ class Function(Value):
         context.symbol_table = SymbolTable(context.parent.symbol_table)
         
         if len(args) > len(self.args):
-            return result.failure(RuntimeError(self.start_pos, self.end_pos, f"{len(args) - len(self.args)} less args needed to be passed into '{self.name}'", self.context))
+            return result.failure(RuntimeError(self.start_pos, self.end_pos, f"{len(args) - len(self.args)} less args needs to be passed into '{self.name}'", self.context))
             
         elif len(args) < len(self.args):
-            return result.failure(RuntimeError(self.start_pos, self.end_pos, f"{len(self.args) - len(args)} more args needed to be passed into '{self.name}'", self.context))
+            return result.failure(RuntimeError(self.start_pos, self.end_pos, f"{len(self.args) - len(args)} more args needs to be passed into '{self.name}'", self.context))
 
         for i in range(len(args)):
             arg_title = self.args[i]
             arg_val = args[i]
             arg_val.set_context(context)
-            context.symbol_table.set(arg_title, arg_value)
+            context.symbol_table.set(arg_title, arg_val)
         
         val = result.register(interp.visit(self.body, context))
         if result.err: return result
 
         return result.success(val)
 
-    def copy(self):
+    def copy_pos(self):
         c = Function(self.name, self.body, self.args)
         c.set_pos(self.start_pos, self.end_pos)
         c.set_context(self.context)
@@ -437,7 +437,7 @@ class FuncNode:
         else:
             self.start_pos = body.start_pos
         
-        self.end_pos = body.end_pos
+        self.end_pos = self.body.end_pos
 
 class CallNode:
     def __init__(self, called_node, args):
@@ -782,8 +782,6 @@ class Parser:
                 return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "'(' Expected"))
         else:
             var_name = None
-            result.register_next()
-            self.next()
             if self.curr_tkn.type != WT_LEFTPAR:
                 return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "Identifier or '(' Expected"))
 
@@ -791,7 +789,7 @@ class Parser:
         self.next()
         args = []
 
-        if self.curr_tkn == WT_IDENTIFIER:
+        if self.curr_tkn.type == WT_IDENTIFIER:
             args.append(self.curr_tkn)
             result.register_next()
             self.next()
@@ -811,7 +809,7 @@ class Parser:
                 return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "',' or ')' Expected"))
         else:
             if self.curr_tkn.type != WT_RIGHTPAR:
-                return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "Identifier or '(' Expected"))
+                return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "Identifier or ')' Expected"))
 
         result.register_next()
         self.next()
@@ -825,7 +823,7 @@ class Parser:
         node = result.register(self.pm_func())
         if result.err: return result
 
-        return result.success(FuncNode(var_name, node, args))
+        return result.success(FuncNode(var_name, args, node))
 
     def parse(self):
         result = self.pm_func()
