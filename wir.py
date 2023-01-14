@@ -37,7 +37,8 @@ LETTERS = string.ascii_letters
 KEYWORDS = ['Var', 'And', 'Or', 'Not', 
             'If', 'Then', 'Otherwise', 'Else',
             'For', 'To', 'Inc', 'Do', 'While', 
-            'Func', 'EndLine']
+            'Func', 'EndLine', 'Return', 'Continue', 
+            'Break']
 SUPPORTED_CHARS = '()*/+-^=<>!,[]'
 
 class Token:
@@ -183,7 +184,7 @@ class FunctionSkeleton(Value):
     def check_and_pop_args(self, arg_names, args, top_cont):
         result = RuntimeResult()
         result.register(self.check_num_args(arg_names, args))
-        if result.err: return result
+        if result.should_return(): return result
 
         self.popu_args(arg_names, args, top_cont)
         return result.success(None)
@@ -200,10 +201,10 @@ class BuiltInFunction(FunctionSkeleton):
         func = getattr(self, func_name, self.no_visit)
 
         result.register(self.check_and_pop_args(func.arg_names, args, top_cont))
-        if result.err: return result
+        if result.should_return(): return result
 
         ret_val = result.register(func(top_cont))
-        if result.err: return result
+        if result.should_return(): return result
 
         return result.success(ret_val)
     
@@ -343,10 +344,10 @@ class Function(FunctionSkeleton):
         context = self.gen_new_context()
         
         result.register(self.check_and_pop_args(self.arg_names, args, context))
-        if result.err: return result
+        if result.should_return(): return result
         
         val = result.register(interp.visit(self.body, context))
-        if result.err: return result
+        if result.should_return(): return result
 
         return result.success(Num.null if return_null else val)
 
@@ -728,11 +729,11 @@ class WhileNode:
         self.end_pos = self.body.end_pos
 
 class FuncNode:
-    def __init__(self, var_name, args, body, return_null):
+    def __init__(self, var_name, args, body, return_auto_ret):
         self.var_name = var_name
         self.args = args
         self.body = body
-        self.return_null = return_null
+        self.return_auto_ret = return_auto_ret
 
         if self.var_name:
             self.start_pos = self.var_name.start_pos
@@ -754,7 +755,21 @@ class CallNode:
         else:
             self.end_pos = self.called_node.end_pos
 
-        
+class ReturnNode:
+    def __init__(self, return_node, start_pos, end_pos):
+        self.return_node = return_node
+        self.start_pos = start_pos
+        self.end_pos = end_pos
+
+class BreakNode:
+    def __init__(self, start_pos, end_pos):
+        self.start_pos = start_pos
+        self.end_pos = end_pos
+
+class ContinueNode:
+    def __init__(self, start_pos, end_pos):
+        self.start_pos = start_pos
+        self.end_pos = end_pos    
 
 #######################################
 # PARSER HANDLER
@@ -782,7 +797,7 @@ class Parser:
         if self.tkn_ind >= 0 and self.tkn_ind < len(self.tkns):
             self.curr_tkn = self.tkns[self.tkn_ind]
     
-    def statement(self):
+    def statements(self):
         result = ParseResult()
         statements = []
         start_pos = self.curr_tkn.start_pos.copy_pos()
@@ -816,6 +831,35 @@ class Parser:
             statements.append(stmt)
         
         return result.success(ListNode(statements, start_pos, self.curr_tkn.end_pos.copy_pos()))
+    
+    def singular_statement(self):
+        result = ParseResult()
+        start_pos = self.curr_tkn.start_pos.copy_pos()
+
+        if self.curr_tkn.matches(WT_KEYWORD, 'Return'):
+            result.register_next()
+            self.next()
+        
+            new_expr = result.try_register(self.pm_func())
+            if not new_expr:
+                self.reverse(result.to_reverse_count)
+            return result.success(ReturnNode(new_expr, start_pos, self.curr_tkn.start_pos.copy_pos()))
+
+        if self.curr_tkn.matches(WT_KEYWORD, 'Continue'):
+            result.register_next()
+            self.next()
+            return result.success(ContinueNode(start_pos, self.curr_tkn.start_pos.copy_pos()))
+
+        if self.curr_tkn.matches(WT_KEYWORD, 'Break'):
+            result.register_next()
+            self.next()
+            return result.success(BreakNode(start_pos, self.curr_tkn.start_pos.copy_pos()))
+
+        new_expr = result.register(self.pm_func())
+        if result.err:
+            return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "Expected int, float, identifier, 'Var', 'If', 'For', 'While', 'Func', 'Return', 'Continue', 'Break', '+', '-', '[', or '('"))
+        
+        return result.success()
     
     def bin_op(self, func1, operations, func2=None):
         result = ParseResult()
@@ -1032,7 +1076,7 @@ class Parser:
             result.register_next()
             self.next()
 
-            statements = result.register(self.statement())
+            statements = result.register(self.statements())
             if result.err: return result
             cases.append((cond, statements, True))
 
@@ -1045,7 +1089,7 @@ class Parser:
                 new_cases, else_case = total_cases
                 cases.extend(new_cases)
         else:
-            new_expr = result.register(self.pm_func())
+            new_expr = result.register(self.singular_statement())
             if result.err: return result
             cases.append((cond, new_expr, False))
             
@@ -1071,7 +1115,7 @@ class Parser:
                 result.register_next()
                 self.next()
 
-                statements = result.register(self.statement())
+                statements = result.register(self.statements())
                 if result.err: return result
                 else_case = (statements, True)
 
@@ -1154,7 +1198,7 @@ class Parser:
             result.register_next()
             self.next()
 
-            body = result.register(self.statement())
+            body = result.register(self.statements())
             if result.err: return result
 
             if not self.curr_tkn.matches(WT_KEYWORD, 'EndLine'):
@@ -1165,7 +1209,7 @@ class Parser:
 
             return result.success(ForNode(var_name, start_val, end_val, inc_val, body, True))
         
-        body = result.register(self.pm_func())
+        body = result.register(self.singular_statement())
         if result.err: return result
 
         return result.success(ForNode(var_name, start_val, end_val, inc_val, body, False))
@@ -1189,7 +1233,7 @@ class Parser:
             result.register_next()
             self.next()
 
-            body = result.register(self.statement())
+            body = result.register(self.statements())
             if result.err: return result
 
             if not self.curr_tkn.matches(WT_KEYWORD, 'EndLine'):
@@ -1201,7 +1245,7 @@ class Parser:
             return result.success(WhileNode(cond, body, True))
         
         
-        body = result.register(self.pm_func())
+        body = result.register(self.singular_statement())
         if result.err: return result
 
         return result.success(WhileNode(cond, body, False))
@@ -1270,7 +1314,7 @@ class Parser:
         result.register_next()
         self.next()
 
-        body = result.register(self.statement())
+        body = result.register(self.statements())
         if result.err: return result
 
         if not self.curr_tkn.matches(WT_KEYWORD, 'EndLine'):
@@ -1316,7 +1360,7 @@ class Parser:
         return result.success(ListNode(elements, start_pos, self.curr_tkn.end_pos.copy_pos()))
 
     def parse(self):
-        result = self.statement()
+        result = self.statements()
         if not result.err and self.curr_tkn.type != WT_EOF:
             result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "Expected '+', '-', '*', or '/'"))
         return result
@@ -1386,7 +1430,7 @@ class Interpreter:
         result = RuntimeResult()
         var_name = node.var_name_tkn.value
         value = result.register(self.visit(node.value_node, context))
-        if result.err: return result
+        if result.should_return(): return result
 
         context.symbol_table.set(var_name, value)
         return result.success(value)
@@ -1461,17 +1505,17 @@ class Interpreter:
 
         for cond, expr, return_null in node.cases:
             cond_val = result.register(self.visit(cond, context))
-            if result.err: return result
+            if result.should_return(): return result
 
             if cond_val.is_true():
                 expr_val = result.register(self.visit(expr, context))
-                if result.err: return result
+                if result.should_return(): return result
                 return result.success(Num.null if return_null else expr_val)
 
         if node.else_case:
             new_expr, return_null = node.else_case
             else_val = result.register(self.visit(new_expr, context))
-            if result.err: return result
+            if result.should_return(): return result
             
             return result.success(Num.null if return_null else else_val)
         
@@ -1482,14 +1526,14 @@ class Interpreter:
         elements = []
 
         start_val = result.register(self.visit(node.start_val, context))
-        if result.err: return result
+        if result.should_return(): return result
 
         end_val = result.register(self.visit(node.end_val, context))
-        if result.err: return result
+        if result.should_return(): return result
 
         if node.inc:
             inc_val = result.register(self.visit(node.inc, context))
-            if result.err: return result
+            if result.should_return(): return result
         else:
             inc_val = Num(1)
         
@@ -1506,7 +1550,7 @@ class Interpreter:
             i += int(inc_val.value)
 
             elements.append(result.register(self.visit(node.body, context)))
-            if result.err: return result
+            if result.should_return(): return result
         
         return result.success(Num.null if return_null else List(elements).set_context(context).set_pos(node.start_pos, node.end_pos))
 
@@ -1516,12 +1560,12 @@ class Interpreter:
 
         while True:
             cond = result.register(self.visit(node.cond, context))
-            if result.err: return result
+            if result.should_return(): return result
 
             if not cond.is_true(): break
 
             elements.append(result.register(self.visit(node.body, context)))
-            if result.err: return result
+            if result.should_return(): return result
 
         return result.success(Num.null if return_null else List(elements).set_context(context).set_pos(node.start_pos, node.end_pos))
     
@@ -1543,15 +1587,15 @@ class Interpreter:
         args = []
 
         vals_calling = result.register(self.visit(node.called_node, context))
-        if result.err: return result
+        if result.should_return(): return result
         vals_calling = vals_calling.copy_pos().set_pos(node.start_pos, node.end_pos)
 
         for arg in node.args:
             args.append(result.register(self.visit(arg, context)))
-            if result.err: return result
+            if result.should_return(): return result
 
         ret_val = result.register(vals_calling.run(args))
-        if result.err: return result
+        if result.should_return(): return result
 
         ret_val = ret_val.copy_pos().set_pos(node.start_pos, node.end_pos).set_context(context)
         return result.success(ret_val)
@@ -1565,7 +1609,7 @@ class Interpreter:
 
         for el in node.elements:
             elements.append(result.register(self.visit(el, context)))
-            if result.err: return result
+            if result.should_return(): return result
         
         return result.success(List(elements).set_context(context).set_pos(node.start_pos, node.end_pos))
 
@@ -1640,20 +1684,49 @@ def run_program(file_name, text):
 
 class RuntimeResult:
     def __init__(self):
+        self.reset()
+    
+    def reset(self):
         self.value = None
         self.err = None
+        self.func_ret_val = None
+        self.loop_cont = False
+        self.loop_break = False
     
     def register(self, result):
-        if result.err: self.err = result.err
+        self.err = result.err
+        self.func_ret_val = result.func_ret_val
+        self.loop_cont = result.loop_cont
+        self.loop_break = result.loop_break
         return result.value
     
     def success(self, value):
+        self.reset()
         self.value = value
         return self
     
+    def success_return(self, value):
+        self.reset()
+        self.func_ret_val = value
+        return self
+    
+    def success_continue(self):
+        self.reset()
+        self.loop_cont = True
+        return self
+    
+    def success_break(self):
+        self.reset()
+        self.loop_break = True
+        return self
+    
     def failure(self, err):
+        self.reset()
         self.err = err
         return self
+    
+    def should_return(self):
+        return (self.err or self.func_ret_val or self.loop_cont or self.loop_break)
 
 #######################################
 # ERROR HANDLER
