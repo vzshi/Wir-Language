@@ -332,11 +332,11 @@ BuiltInFunction.pop = BuiltInFunction('pop')
 BuiltInFunction.extend = BuiltInFunction('extend')
 
 class Function(FunctionSkeleton):
-    def __init__(self, name, body, arg_names, return_null):
+    def __init__(self, name, body, arg_names, auto_ret):
         super().__init__(name)
         self.body = body
         self.arg_names = arg_names
-        self.return_null = return_null
+        self.auto_ret = auto_ret
     
     def run(self, args):
         result = RuntimeResult()
@@ -347,12 +347,13 @@ class Function(FunctionSkeleton):
         if result.should_return(): return result
         
         val = result.register(interp.visit(self.body, context))
-        if result.should_return(): return result
+        if result.should_return() and result.func_ret_val is None: return result
 
-        return result.success(Num.null if return_null else val)
+        ret_val = (value if self.auto_ret else None) or result.func_ret_val or Num.null
+        return result.success(ret_val)
 
     def copy_pos(self):
-        c = Function(self.name, self.body, self.arg_names, self.return_null)
+        c = Function(self.name, self.body, self.arg_names, self.auto_ret)
         c.set_pos(self.start_pos, self.end_pos)
         c.set_context(self.context)
         return c
@@ -729,11 +730,11 @@ class WhileNode:
         self.end_pos = self.body.end_pos
 
 class FuncNode:
-    def __init__(self, var_name, args, body, return_auto_ret):
+    def __init__(self, var_name, args, body, auto_ret):
         self.var_name = var_name
         self.args = args
         self.body = body
-        self.return_auto_ret = return_auto_ret
+        self.auto_ret = auto_ret
 
         if self.var_name:
             self.start_pos = self.var_name.start_pos
@@ -859,7 +860,7 @@ class Parser:
         if result.err:
             return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "Expected int, float, identifier, 'Var', 'If', 'For', 'While', 'Func', 'Return', 'Continue', 'Break', '+', '-', '[', or '('"))
         
-        return result.success()
+        return result.success(new_expr)
     
     def bin_op(self, func1, operations, func2=None):
         result = ParseResult()
@@ -1306,7 +1307,7 @@ class Parser:
             node = result.register(self.pm_func())
             if result.err: return result
 
-            return result.success(FuncNode(var_name, args, node, False))
+            return result.success(FuncNode(var_name, args, node, True))
         
         if self.curr_tkn.type != WT_NEWLINE:
             return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "'=>' or NewLine Expected"))
@@ -1323,7 +1324,7 @@ class Parser:
         result.register_next()
         self.next()
 
-        return result.success(FuncNode(var_name, args, node, True))
+        return result.success(FuncNode(var_name, args, node, False))
     
     def list_func(self):
         result = ParseResult()
@@ -1549,9 +1550,17 @@ class Interpreter:
             context.symbol_table.set(node.var_name.value, Num(i))
             i += int(inc_val.value)
 
-            elements.append(result.register(self.visit(node.body, context)))
-            if result.should_return(): return result
+            val = result.register(self.visit(node.body, context))
+            if result.should_return() and result.loop_cont == False and result.loop_break == False: return result
         
+            if result.loop_cont:
+                continue
+            
+            if result.loop_break:
+                break
+
+            elements.append(val)
+
         return result.success(Num.null if return_null else List(elements).set_context(context).set_pos(node.start_pos, node.end_pos))
 
     def visit_WhileNode(self, node, context):
@@ -1564,8 +1573,16 @@ class Interpreter:
 
             if not cond.is_true(): break
 
-            elements.append(result.register(self.visit(node.body, context)))
-            if result.should_return(): return result
+            val = result.register(self.visit(node.body, context))
+            if result.should_return() and result.loop_cont == False and result.loop_break == False: return result
+
+            if result.loop_cont:
+                continue
+
+            if result.loop_break:
+                break
+
+            elements.append(val)
 
         return result.success(Num.null if return_null else List(elements).set_context(context).set_pos(node.start_pos, node.end_pos))
     
@@ -1575,7 +1592,7 @@ class Interpreter:
         func_name = node.var_name.value if node.var_name else None
         body = node.body
         args = [args.value for args in node.args]
-        func_val = Function(func_name, body, args, node.return_null).set_context(context).set_pos(node.start_pos, node.end_pos)
+        func_val = Function(func_name, body, args, node.auto_ret).set_context(context).set_pos(node.start_pos, node.end_pos)
 
         if node.var_name:
             context.symbol_table.set(func_name, func_val)
@@ -1613,6 +1630,23 @@ class Interpreter:
         
         return result.success(List(elements).set_context(context).set_pos(node.start_pos, node.end_pos))
 
+    def visit_ReturnNode(self, node, context):
+        result = RuntimeResult()
+
+        if node.return_node:
+            val = result.register(self.visit(node.return_node, context))
+            
+            if result.should_return(): return result
+        else:
+            val = Num.null
+        
+        return result.success_return(val)
+    
+    def visit_ContinueNode(self, node, context):
+        return RuntimeResult().success_continue()
+
+    def visit_BreakNode(self, node, context):
+        return RuntimeResult().success_break()
 
 #######################################
 # SYMBOL TABLE CLASS
