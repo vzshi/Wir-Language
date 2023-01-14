@@ -318,6 +318,36 @@ class BuiltInFunction(FunctionSkeleton):
         return RuntimeResult().success(Num.null)
     run_extend.arg_names = ['lst1', 'lst2']
 
+    def run_exce(self, top_cont):
+        file_name = top_cont.symbol_table.get("file_name")
+        if not isinstance(file_name, String):
+            return RuntimeResult().failure(RuntimeError(self.start_pos, self.end_pos, "Arg must be String", top_cont)))
+
+        file_name = file_name.value  
+
+        try:
+            with open(file_name, "r") as f:
+                script = f.read()
+        except Exception as e:
+            return RuntimeResult().failure(RuntimeError(f"Failed to lead script \"{file_name}\"\n" + str(e), top_cont))
+
+        _, err = run(file_name, script)
+
+        if err:
+            return RuntimeResult().failure(RuntimeError(self.start_pos, self.end_pos, f"Failed to finish executing script \"{file_name}\"\n" + err.string_form(), top_cont))
+
+        return RuntimeResult().success(Num.null)
+    run_exce.arg_names = ["file_name"]
+
+    def run_len(self, top_cont):
+        lst = top_cont.symbol_table.get("list")
+
+        if not isinstance(lst, List):
+            return RuntimeResult().failure(RuntimeError(self.start_pos, self.end_pos, "Arg must be List", top_cont))
+        
+        return RuntimeResult().success(Num(len(lst.elements)))
+    run_len.arg_names = ["list"]
+
 BuiltInFunction.print = BuiltInFunction('print')
 BuiltInFunction.print_and_ret = BuiltInFunction('print_and_ret')
 BuiltInFunction.input = BuiltInFunction('input')
@@ -330,6 +360,8 @@ BuiltInFunction.is_func = BuiltInFunction('is_func')
 BuiltInFunction.append = BuiltInFunction('append')
 BuiltInFunction.pop = BuiltInFunction('pop')
 BuiltInFunction.extend = BuiltInFunction('extend')
+BuiltInFunction.run = BuiltInFunction('run')
+BuiltInFunction.len = BuiltInFunction('len')
 
 class Function(FunctionSkeleton):
     def __init__(self, name, body, arg_names, auto_ret):
@@ -458,6 +490,8 @@ class Lexer:
         while self.curr_char is not None:
             if self.curr_char == ' ' or self.curr_char == '\t':
                 self.next_char()
+            elif self.curr_char == '#':
+                self.comment()
             elif self.curr_char in ';\n':
                 tkns.append(Token(WT_NEWLINE, start_pos=self.pos))
                 self.next_char()
@@ -585,6 +619,14 @@ class Lexer:
             tkn_type = WT_GTE
         
         return Token(tkn_type, start_pos=start_pos, end_pos=self.pos), None
+    
+    def comment(self):
+        self.next()
+
+        while self.curr_char != '\n':
+            self.next()
+        
+        self.next()
 
     def make_num_tkn(self):
         num = ''
@@ -1124,7 +1166,7 @@ class Parser:
                     result.register_next()
                     self.next()
                 else:
-                    return res.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "'End' Expected"))
+                    return res.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "'EndLine' Expected"))
             else:
                 new_expr = result.register(self.pm_func())
                 if result.err: return result
@@ -1693,6 +1735,8 @@ global_sym_table.set("IsFunc", BuiltInFunction.is_func)
 global_sym_table.set("Append", BuiltInFunction.append)
 global_sym_table.set("Pop", BuiltInFunction.pop)
 global_sym_table.set("Extend", BuiltInFunction.extend)
+global_sym_table.set("Run", BuiltInFunction.run)
+global_sym_table.set("Len", BuiltInFunction.len)
 
 def run_program(file_name, text):
     new_lexer = Lexer(file_name, text)
