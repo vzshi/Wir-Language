@@ -458,7 +458,7 @@ class Lexer:
                 self.next_char()
             elif self.curr_char in ';\n':
                 tkns.append(Token(WT_NEWLINE, start_pos=self.pos))
-                self.next()
+                self.next_char()
             elif self.curr_char in SUPPORTED_CHARS:
                 curr_char_tkn, err = self.make_op_tkn()
                 if err:
@@ -799,7 +799,7 @@ class Parser:
 
         while True:
             new_lines = 0
-            while self.curr-tkn.type == WT_NEWLINE:
+            while self.curr_tkn.type == WT_NEWLINE:
                 result.register_next()
                 self.next()
                 new_lines += 1
@@ -940,12 +940,12 @@ class Parser:
         result = ParseResult()
         tkn = self.curr_tkn
 
-        if self.curr_tkn.type == WT_INT or self.curr_tkn == WT_FLOAT:
+        if tkn.type == WT_INT or self.curr_tkn == WT_FLOAT:
             result.register_next()
             self.next()
             return result.success(NumNode(tkn))
 
-        elif self.curr_tkn.type == WT_STRING:
+        elif tkn.type == WT_STRING:
             result.register_next()
             self.next()
             return result.success(StringNode(tkn))
@@ -1016,7 +1016,7 @@ class Parser:
         if not self.curr_tkn.matches(WT_KEYWORD, key):
             return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, f"'{key}' Expected"))
         
-        result.register_next
+        result.register_next()
         self.next()
 
         cond = result.register(self.pm_func())
@@ -1032,7 +1032,7 @@ class Parser:
             result.register_next()
             self.next()
 
-            statements = result.register(self.statements())
+            statements = result.register(self.statement())
             if result.err: return result
             cases.append((cond, statements, True))
 
@@ -1071,7 +1071,7 @@ class Parser:
                 result.register_next()
                 self.next()
 
-                statements = result.register(self.statements())
+                statements = result.register(self.statement())
                 if result.err: return result
                 else_case = (statements, True)
 
@@ -1154,7 +1154,7 @@ class Parser:
             result.register_next()
             self.next()
 
-            body = result.register(self.statements())
+            body = result.register(self.statement())
             if result.err: return result
 
             if not self.curr_tkn.matches(WT_KEYWORD, 'EndLine'):
@@ -1189,7 +1189,7 @@ class Parser:
             result.register_next()
             self.next()
 
-            body = result.register(self.statements())
+            body = result.register(self.statement())
             if result.err: return result
 
             if not self.curr_tkn.matches(WT_KEYWORD, 'EndLine'):
@@ -1270,7 +1270,7 @@ class Parser:
         result.register_next()
         self.next()
 
-        body = result.register(self.statements())
+        body = result.register(self.statement())
         if result.err: return result
 
         if not self.curr_tkn.matches(WT_KEYWORD, 'EndLine'):
@@ -1279,7 +1279,7 @@ class Parser:
         result.register_next()
         self.next()
 
-            return result.success(FuncNode(var_name, args, node, True))
+        return result.success(FuncNode(var_name, args, node, True))
     
     def list_func(self):
         result = ParseResult()
@@ -1316,7 +1316,7 @@ class Parser:
         return result.success(ListNode(elements, start_pos, self.curr_tkn.end_pos.copy_pos()))
 
     def parse(self):
-        result = self.statements()
+        result = self.statement()
         if not result.err and self.curr_tkn.type != WT_EOF:
             result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "Expected '+', '-', '*', or '/'"))
         return result
@@ -1472,7 +1472,8 @@ class Interpreter:
             new_expr, return_null = node.else_case
             else_val = result.register(self.visit(new_expr, context))
             if result.err: return result
-                return result.success(Num.null if return_null else expr_val)
+            
+            return result.success(Num.null if return_null else else_val)
         
         return result.success(Num.null)
     
