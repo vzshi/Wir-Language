@@ -13,8 +13,10 @@ WT_RIGHTPAR = 'RIGHTPAR'
 WT_LEFTBRACKET = 'LEFTBRACKET'
 WT_RIGHTBRACKET = 'RIGHTBRACKET'
 WT_POW = 'POW'
+WT_MOD = 'MOD'
 WT_MUL = 'MUL'
 WT_DIV = 'DIV'
+WT_FLOORDIV = 'FLOORDIV'
 WT_PLUS = 'PLUS'
 WT_MINUS = 'MINUS'
 WT_EOF = 'EOF'
@@ -39,7 +41,7 @@ KEYWORDS = ['Var', 'And', 'Or', 'Not',
             'For', 'To', 'Inc', 'Do', 'While', 
             'Func', 'EndLine', 'Return', 'Continue', 
             'Break']
-SUPPORTED_CHARS = '()*/+-^=<>!,[]'
+SUPPORTED_CHARS = '()*/+-^=<>!,[]%'
 
 class Token:
     def __init__(self, wir_type, value=None, start_pos=None, end_pos=None):
@@ -115,9 +117,9 @@ class Num(Value):
 
     def basic_ops(self, other_num, operation):
         if isinstance(other_num, Num):
-            if operation == '/' and other_num.value == '0':
+            if (operation == '/' or operation == '//' or operation == '%') and (other_num.value == '0' or other_num.value == 0):
                 return None, RuntimeError(other_num.start_pos, other_num.end_pos, "Division by Zero", self.context)
-            if operation == '^':
+            elif operation == '^':
                 return Num(eval(f'{self.value} ** {other_num.value}')).set_context(self.context), None
             return Num(eval(f'{self.value} {operation} {other_num.value}')).set_context(self.context), None
         else:
@@ -544,10 +546,12 @@ class Lexer:
             return Token(WT_RIGHTBRACKET, start_pos=self.pos), None
         elif self.curr_char == '^':
             return Token(WT_POW, start_pos=self.pos), None
+        elif self.curr_char == '%':
+            return Token(WT_MOD, start_pos=self.pos), None
         elif self.curr_char == '*':
             return Token(WT_MUL, start_pos=self.pos), None
         elif self.curr_char == '/':
-            return Token(WT_DIV, start_pos=self.pos), None
+            return self.make_div()
         elif self.curr_char == '+':
             return Token(WT_PLUS, start_pos=self.pos), None
         elif self.curr_char == '-':
@@ -566,6 +570,17 @@ class Lexer:
             return self.make_gt()
 
         return None, None
+
+    def make_div(self):
+        tkn_type = WT_DIV
+        start_pos = self.pos.copy_pos()
+        self.next_char()
+
+        if self.curr_char == '/':
+            self.next_char()
+            tkn_type = WT_FLOORDIV
+        
+        return Token(tkn_type, start_pos=start_pos, end_pos=self.pos), None
     
     def make_not_equals(self):
         start_pos = self.pos.copy_pos()
@@ -963,7 +978,7 @@ class Parser:
         
     #term
     def md_func(self):
-        return self.bin_op(self.num_func, (WT_MUL, WT_DIV), self.num_func)
+        return self.bin_op(self.num_func, (WT_MUL, WT_DIV, WT_FLOORDIV, WT_MOD), self.num_func)
 
     #factor
     def num_func(self):
@@ -1021,7 +1036,7 @@ class Parser:
         result = ParseResult()
         tkn = self.curr_tkn
 
-        if tkn.type == WT_INT or self.curr_tkn == WT_FLOAT:
+        if tkn.type == WT_INT or tkn.type == WT_FLOAT:
             result.register_next()
             self.next()
             return result.success(NumNode(tkn))
@@ -1495,6 +1510,10 @@ class Interpreter:
             result, err = l.basic_ops(r, '*')
         elif node.op_tkn.type == WT_DIV:
             result, err = l.basic_ops(r, '/')
+        elif node.op_tkn.type == WT_FLOORDIV:
+            result, err = l.basic_ops(r, '//')
+        elif node.op_tkn.type == WT_MOD:
+            result, err = l.basic_ops(r, '%')
         elif node.op_tkn.type == WT_POW:
             result, err = l.basic_ops(r, '^')
         elif node.op_tkn.type == WT_EQUALS:
