@@ -3,7 +3,7 @@ import wir
 while True:
     text = input('wir > ')
     if text.strip() == "": continue
-    result, err = wir.run_program('<a>', text)
+    result, err = wir.run_program('<stdin>', text)
 
     if err: print(err.string_form())
     elif result:
