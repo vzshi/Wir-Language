@@ -1,0 +1,10 @@
+# A comment
+
+Func oopify(prefix) => prefix + "oop"
+
+Print("Greetings universe!")
+
+For i = 0 To 5 Do
+    Print(oopify("l"))
+    Print(oopify("sp"))
+EndLine

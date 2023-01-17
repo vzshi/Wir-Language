@@ -100,6 +100,9 @@ class Value:
     def copy_pos(self):
         raise Exception("No 'copy_pos' method defined")
     
+    def run(self, args):
+        return RuntimeResult().failure(self.illegal_op())
+    
     def illegal_op(self, other=None):
         if not other: other = self
         return RuntimeError(self.start_pos, self.end_pos, 'Illegal Operation', self.context)
@@ -220,7 +223,7 @@ class BuiltInFunction(FunctionSkeleton):
         return c
 
     def __repr__(self):
-        return f"<Built-In Func {self.name}"
+        return f"<Built-In Func {self.name}>"
     
     def run_print(self, top_cont):
         print(str(top_cont.symbol_table.get('value')))
@@ -229,7 +232,7 @@ class BuiltInFunction(FunctionSkeleton):
 
     def run_print_and_ret(self, top_cont):
         return RuntimeResult().success(String(str(top_cont.symbol_table.get('value'))))
-    run_print.arg_names = ['value']
+    run_print_and_ret.arg_names = ['value']
 
     def run_input(self, top_cont):
         text = input()
@@ -245,7 +248,7 @@ class BuiltInFunction(FunctionSkeleton):
             except ValueError:
                 print(f"'{text}' must be an integer")
         return RuntimeResult().success(Num(num))
-    run_input.arg_names = []
+    run_input_to_int.arg_names = []
 
     def run_clear(self, top_cont):
         os.system('clear')
@@ -302,20 +305,20 @@ class BuiltInFunction(FunctionSkeleton):
         index = top_cont.symbol_table.get("index")
 
         if not isinstance(lst, List):
-            return RuntimeResult().failure(RuntimeError(self.pos_start, self.pos_end, "First argument must be list", exec_ctx))
+            return RuntimeResult().failure(RuntimeError(self.pos_start, self.pos_end, "First argument must be list", top_cont))
 
         if not isinstance(index, Num):
-            return RuntimeResult().failure(RuntimeError(self.pos_start, self.pos_end, "Second argument must be number", exec_ctx))
+            return RuntimeResult().failure(RuntimeError(self.pos_start, self.pos_end, "Second argument must be number", top_cont))
 
         try:
             element = lst.elements.pop(index.value)
         except:
-            return RuntimeResult().failure(RuntimeError(self.pos_start, self.pos_end, 'Element at this index could not be removed from list because index is out of bounds', exec_ctx))
+            return RuntimeResult().failure(RuntimeError(self.pos_start, self.pos_end, 'Element at this index could not be removed from list because index is out of bounds', top_cont))
         
         return RuntimeResult().success(element)
     run_pop.arg_names = ["list", "index"]
 
-    def run_exce(self, top_cont):
+    def run_run(self, top_cont):
         file_name = top_cont.symbol_table.get("file_name")
         if not isinstance(file_name, String):
             return RuntimeResult().failure(RuntimeError(self.start_pos, self.end_pos, "Arg must be String", top_cont))
@@ -328,13 +331,13 @@ class BuiltInFunction(FunctionSkeleton):
         except Exception as e:
             return RuntimeResult().failure(RuntimeError(f"Failed to lead script \"{file_name}\"\n" + str(e), top_cont))
 
-        _, err = run(file_name, script)
+        _, err = run_program(file_name, script)
 
         if err:
             return RuntimeResult().failure(RuntimeError(self.start_pos, self.end_pos, f"Failed to finish executing script \"{file_name}\"\n" + err.string_form(), top_cont))
 
         return RuntimeResult().success(Num.null)
-    run_exce.arg_names = ["file_name"]
+    run_run.arg_names = ["file_name"]
 
     def run_len(self, top_cont):
         lst = top_cont.symbol_table.get("list")
@@ -345,20 +348,20 @@ class BuiltInFunction(FunctionSkeleton):
         return RuntimeResult().success(Num(len(lst.elements)))
     run_len.arg_names = ["list"]
 
-BuiltInFunction.print = BuiltInFunction('print')
-BuiltInFunction.print_and_ret = BuiltInFunction('print_and_ret')
-BuiltInFunction.input = BuiltInFunction('input')
-BuiltInFunction.input_to_int = BuiltInFunction('input_to_int')
-BuiltInFunction.clear = BuiltInFunction('clear')
-BuiltInFunction.is_num = BuiltInFunction('is_num')
-BuiltInFunction.is_str = BuiltInFunction('is_str')
-BuiltInFunction.is_lst = BuiltInFunction('is_lst')
-BuiltInFunction.is_func = BuiltInFunction('is_func')
-BuiltInFunction.append = BuiltInFunction('append')
-BuiltInFunction.pop = BuiltInFunction('pop')
-BuiltInFunction.extend = BuiltInFunction('extend')
-BuiltInFunction.run = BuiltInFunction('run')
-BuiltInFunction.len = BuiltInFunction('len')
+BuiltInFunction.print = BuiltInFunction("print")
+BuiltInFunction.print_and_ret = BuiltInFunction("print_and_ret")
+BuiltInFunction.input = BuiltInFunction("input")
+BuiltInFunction.input_to_int = BuiltInFunction("input_to_int")
+BuiltInFunction.clear = BuiltInFunction("clear")
+BuiltInFunction.is_num = BuiltInFunction("is_num")
+BuiltInFunction.is_str = BuiltInFunction("is_str")
+BuiltInFunction.is_lst = BuiltInFunction("is_lst")
+BuiltInFunction.is_func = BuiltInFunction("is_func")
+BuiltInFunction.append = BuiltInFunction("append")
+BuiltInFunction.pop = BuiltInFunction("pop")
+BuiltInFunction.extend = BuiltInFunction("extend")
+BuiltInFunction.r = BuiltInFunction("run")
+BuiltInFunction.len = BuiltInFunction("len")
 
 class Function(FunctionSkeleton):
     def __init__(self, name, body, arg_names, auto_ret):
@@ -378,7 +381,7 @@ class Function(FunctionSkeleton):
         val = result.register(interp.visit(self.body, context))
         if result.should_return() and result.func_ret_val is None: return result
 
-        ret_val = (value if self.auto_ret else None) or result.func_ret_val or Num.null
+        ret_val = (val if self.auto_ret else None) or result.func_ret_val or Num.null
         return result.success(ret_val)
 
     def copy_pos(self):
@@ -388,7 +391,7 @@ class Function(FunctionSkeleton):
         return c
     
     def __repr__(self):
-        return f'<Func {self.name}>'
+        return f'<User Func {self.name}>'
 
 class String(Value):
     def __init__(self, value):
@@ -661,12 +664,12 @@ class Lexer:
         return Token(tkn_type, iden_str, start_pos, self.pos)
     
     def comment(self):
-        self.next()
+        self.next_char()
 
         while self.curr_char != '\n':
-            self.next()
+            self.next_char()
         
-        self.next()
+        self.next_char()
 
 #######################################
 # LINE_POSITION CLASS
@@ -1616,7 +1619,7 @@ class Interpreter:
 
             elements.append(val)
 
-        return result.success(Num.null if return_null else List(elements).set_context(context).set_pos(node.start_pos, node.end_pos))
+        return result.success(Num.null if node.return_null else List(elements).set_context(context).set_pos(node.start_pos, node.end_pos))
 
     def visit_WhileNode(self, node, context):
         result = RuntimeResult()
@@ -1656,17 +1659,17 @@ class Interpreter:
     
     def visit_CallNode(self, node, context):
         result = RuntimeResult()
-        args = []
+        arguments = []
 
         vals_calling = result.register(self.visit(node.called_node, context))
         if result.should_return(): return result
         vals_calling = vals_calling.copy_pos().set_pos(node.start_pos, node.end_pos)
 
         for arg in node.args:
-            args.append(result.register(self.visit(arg, context)))
+            arguments.append(result.register(self.visit(arg, context)))
             if result.should_return(): return result
 
-        ret_val = result.register(vals_calling.run(args))
+        ret_val = result.register(vals_calling.run(arguments))
         if result.should_return(): return result
 
         ret_val = ret_val.copy_pos().set_pos(node.start_pos, node.end_pos).set_context(context)
@@ -1745,7 +1748,7 @@ global_sym_table.set_("IsFunc", BuiltInFunction.is_func)
 global_sym_table.set_("Append", BuiltInFunction.append)
 global_sym_table.set_("Pop", BuiltInFunction.pop)
 global_sym_table.set_("Extend", BuiltInFunction.extend)
-global_sym_table.set_("Run", BuiltInFunction.run)
+global_sym_table.set_("Run", BuiltInFunction.r)
 global_sym_table.set_("Len", BuiltInFunction.len)
 
 def run_program(file_name, text):
