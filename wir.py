@@ -224,6 +224,20 @@ class BuiltInFunction(FunctionSkeleton):
 
     def __repr__(self):
         return f"<Built-In Func {self.name}>"
+
+    def run_pow(self, top_cont):
+        base = top_cont.symbol_table.get('val1')
+        expo = top_cont.symbol_table.get('val2')
+
+        if not isinstance(base, Num):
+            return RuntimeResult().failure(RuntimeError(self.start_pos, self.end_pos, "First arg must be Num", top_cont))
+        
+        if not isinstance(expo, Num):
+            return RuntimeResult().failure(RuntimeError(self.start_pos, self.end_pos, "Second arg must be Num", top_cont))
+
+        return RuntimeResult().success(Num(pow(int(base.value), int(expo.value))))
+
+    run_pow.arg_names = ['val1', 'val2']
     
     def run_print(self, top_cont):
         print(str(top_cont.symbol_table.get('value')))
@@ -302,18 +316,18 @@ class BuiltInFunction(FunctionSkeleton):
 
     def run_pop(self, top_cont):
         lst = top_cont.symbol_table.get("list")
-        index = top_cont.symbol_table.get("index")
+        ind = top_cont.symbol_table.get("index")
 
         if not isinstance(lst, List):
-            return RuntimeResult().failure(RuntimeError(self.pos_start, self.pos_end, "First argument must be list", top_cont))
+            return RuntimeResult().failure(RuntimeError(self.start_pos, self.end_pos, "First argument must be list", top_cont))
 
-        if not isinstance(index, Num):
-            return RuntimeResult().failure(RuntimeError(self.pos_start, self.pos_end, "Second argument must be number", top_cont))
+        if not isinstance(ind, Num):
+            return RuntimeResult().failure(RuntimeError(self.start_pos, self.end_pos, "Second argument must be number", top_cont))
 
         try:
-            element = lst.elements.pop(index.value)
+            element = lst.elements.pop(int(ind.value))
         except:
-            return RuntimeResult().failure(RuntimeError(self.pos_start, self.pos_end, 'Element at this index could not be removed from list because index is out of bounds', top_cont))
+            return RuntimeResult().failure(RuntimeError(self.start_pos, self.end_pos, 'Element at this index could not be removed from list because index is out of bounds', top_cont))
         
         return RuntimeResult().success(element)
     run_pop.arg_names = ["list", "index"]
@@ -348,6 +362,30 @@ class BuiltInFunction(FunctionSkeleton):
         return RuntimeResult().success(Num(len(lst.elements)))
     run_len.arg_names = ["list"]
 
+    def run_range(self, top_cont):
+        start = top_cont.symbol_table.get("val1")
+        stop = top_cont.symbol_table.get("val2")
+        step = top_cont.symbol_table.get("val3")
+
+        if not isinstance(start, Num):
+            return RuntimeResult().failure(RuntimeError(self.start_pos, self.end_pos, "Args must be Nums", top_cont))
+        
+        if not isinstance(stop, Num):
+            return RuntimeResult().failure(RuntimeError(self.start_pos, self.end_pos, "Args must be Nums", top_cont))
+        
+        if not isinstance(step, Num):
+            return RuntimeResult().failure(RuntimeError(self.start_pos, self.end_pos, "Args must be Nums", top_cont))
+        
+        if int(step.value) == 0:
+            return RuntimeResult().failure(RuntimeError(self.start_pos, self.end_pos, "Step cannot be 0", top_cont))
+
+        if int(step.value) > 0 and int(start.value) > int(stop.value):
+            return RuntimeResult().failure(RuntimeError(self.start_pos, self.end_pos, "Start cannot be greater than Stop if step is positive", top_cont))
+        elif int(step.value) < 0 and int(start.value) < int(stop.value):
+            return RuntimeResult().failure(RuntimeError(self.start_pos, self.end_pos, "Start cannot be less than Stop if step is negative", top_cont))
+        return RuntimeResult().success(List(range(int(start.value), int(stop.value), int(step.value))))
+    run_range.arg_names = ["val1", "val2", "val3"]
+
 BuiltInFunction.print = BuiltInFunction("print")
 BuiltInFunction.print_and_ret = BuiltInFunction("print_and_ret")
 BuiltInFunction.input = BuiltInFunction("input")
@@ -362,6 +400,8 @@ BuiltInFunction.pop = BuiltInFunction("pop")
 BuiltInFunction.extend = BuiltInFunction("extend")
 BuiltInFunction.r = BuiltInFunction("run")
 BuiltInFunction.len = BuiltInFunction("len")
+BuiltInFunction.pow = BuiltInFunction("pow")
+BuiltInFunction.range = BuiltInFunction("range")
 
 class Function(FunctionSkeleton):
     def __init__(self, name, body, arg_names, auto_ret):
@@ -1750,6 +1790,8 @@ global_sym_table.set_("Pop", BuiltInFunction.pop)
 global_sym_table.set_("Extend", BuiltInFunction.extend)
 global_sym_table.set_("Run", BuiltInFunction.r)
 global_sym_table.set_("Len", BuiltInFunction.len)
+global_sym_table.set_("Pow", BuiltInFunction.pow)
+global_sym_table.set_("Range", BuiltInFunction.range)
 
 def run_program(file_name, text):
     new_lexer = Lexer(file_name, text)
