@@ -12,6 +12,7 @@ WT_LEFTPAR = 'LEFTPAR'
 WT_RIGHTPAR = 'RIGHTPAR'
 WT_LEFTBRACKET = 'LEFTBRACKET'
 WT_RIGHTBRACKET = 'RIGHTBRACKET'
+WT_SQUIG = 'SQUIG'
 WT_POW = 'POW'
 WT_MOD = 'MOD'
 WT_MUL = 'MUL'
@@ -38,10 +39,10 @@ DIGITS = '0123456789'
 LETTERS = string.ascii_letters
 KEYWORDS = ['Var', 'And', 'Or', 'Not', 
             'If', 'Then', 'Otherwise', 'Else',
-            'For', 'To', 'Inc', 'Do', 'While', 
+            'For', 'To', 'Inc', 'Abstain', 'Do', 'While', 
             'Func', 'EndLine', 'Return', 'Continue', 
             'Break']
-SUPPORTED_CHARS = '()*/+-^=<>!,[]%'
+SUPPORTED_CHARS = '()*/+-^=<>!,[]%~'
 
 class Token:
     def __init__(self, wir_type, value=None, start_pos=None, end_pos=None):
@@ -124,6 +125,8 @@ class Num(Value):
                 return None, RuntimeError(other_num.start_pos, other_num.end_pos, "Division by Zero", self.context)
             elif operation == '^':
                 return Num(eval(f'{self.value} ** {other_num.value}')).set_context(self.context), None
+            elif operation == '~':
+                return Num(round(eval(f'{self.value} - {other_num.value}'))), None
             return Num(eval(f'{self.value} {operation} {other_num.value}')).set_context(self.context), None
         else:
             return None, Value.illegal_op(self, other_num)
@@ -386,6 +389,21 @@ class BuiltInFunction(FunctionSkeleton):
         return RuntimeResult().success(List(range(int(start.value), int(stop.value), int(step.value))))
     run_range.arg_names = ["val1", "val2", "val3"]
 
+    def run_stepinc(self, top_cont):
+        val = top_cont.symbol_table.get("value")
+        step = top_cont.symbol_table.get("step")
+
+        if not isinstance(val, Num):
+            return RuntimeResult().failure(RuntimeError(self.start_pos, self.end_pos, "Arg has to be type Num", top_cont))
+
+        if not isinstance(step, Num):
+            return RuntimeResult().failure(RuntimeError(self.start_pos, self.end_pos, "Arg has to be type Num", top_cont))
+
+
+        return RuntimeResult().success(Num(int(val.value) + int(val.value) + int(step.value)))
+
+    run_stepinc.arg_names = ["value", "step"]
+
 BuiltInFunction.print = BuiltInFunction("print")
 BuiltInFunction.print_and_ret = BuiltInFunction("print_and_ret")
 BuiltInFunction.input = BuiltInFunction("input")
@@ -402,6 +420,7 @@ BuiltInFunction.r = BuiltInFunction("run")
 BuiltInFunction.len = BuiltInFunction("len")
 BuiltInFunction.pow = BuiltInFunction("pow")
 BuiltInFunction.range = BuiltInFunction("range")
+BuiltInFunction.stepinc = BuiltInFunction("stepinc")
 
 class Function(FunctionSkeleton):
     def __init__(self, name, body, arg_names, auto_ret):
@@ -495,6 +514,15 @@ class List(Value):
                     return None, RuntimeError(other.start_pos, other.end_pos, "Given index is out of bounds", self.context)
             else:
                 None, Value.illegal_op(self, other)
+        elif operation == '~':
+            if not isinstance(other, List) or len(self.elements) != len(other.elements):
+                return None, RuntimeError(other.start_pos, other.end_pos, "Second arg must be type List and Lists must be equal lengths", self.context)
+            else:
+                copy = self.copy_pos()
+                result = 0
+                for i in range(len(copy.elements)):
+                    result += int(copy.elements[i].value) * int(other.elements[i].value)
+                return Num(result), None
     
     def copy_pos(self):
         c = List(self.elements)
@@ -599,6 +627,8 @@ class Lexer:
             return Token(WT_PLUS, start_pos=self.pos), None
         elif self.curr_char == '-':
             return Token(WT_MINUS, start_pos=self.pos), None
+        elif self.curr_char == '~':
+            return Token(WT_SQUIG, start_pos=self.pos), None
         elif self.curr_char == ',':
             return Token(WT_COMMA, start_pos=self.pos), None
         elif self.curr_char == '!':
@@ -806,19 +836,21 @@ class IfNode:
         self.end_pos = (self.else_case or self.cases[len(self.cases) - 1])[0].end_pos
 
 class ForNode:
-    def __init__(self, var_name, start_val, end_val, inc, body, return_null):
+    def __init__(self, var_name, start_val, end_val, inc, abstain_cond, body, return_null):
         self.var_name = var_name
         self.start_val = start_val
         self.end_val = end_val
         self.inc = inc
+        self.abstain_cond = abstain_cond
         self.body = body
         self.return_null = return_null
         self.start_pos = self.var_name.start_pos
         self.end_pos = self.body.end_pos
 
 class WhileNode:
-    def __init__(self, cond, body, return_null):
+    def __init__(self, cond, abstain_cond, body, return_null):
         self.cond = cond
+        self.abstain_cond
         self.body = body
         self.return_null = return_null
         self.start_pos = self.cond.start_pos
@@ -875,7 +907,6 @@ class Parser:
     def __init__(self, tkns):
         self.tkns = tkns
         self.tkn_ind = -1
-        #self.curr_tkn = None
         self.next()
     
     def next(self):
@@ -1021,7 +1052,7 @@ class Parser:
         
     #term
     def md_func(self):
-        return self.bin_op(self.num_func, (WT_MUL, WT_DIV, WT_FLOORDIV, WT_MOD), self.num_func)
+        return self.bin_op(self.num_func, (WT_MUL, WT_DIV, WT_FLOORDIV, WT_MOD, WT_SQUIG), self.num_func)
 
     #factor
     def num_func(self):
@@ -1283,6 +1314,15 @@ class Parser:
         else:
             inc_val = None
         
+        if self.curr_tkn.matches(WT_KEYWORD, 'Abstain'):
+            result.register_next()
+            self.next()
+
+            abstain_cond = result.register(self.pm_func())
+            if result.err: return result
+        else:
+            abstain_cond = None
+        
         if not self.curr_tkn.matches(WT_KEYWORD, 'Do'):
             return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "'Do' Expected"))
 
@@ -1307,7 +1347,7 @@ class Parser:
         body = result.register(self.singular_statement())
         if result.err: return result
 
-        return result.success(ForNode(var_name, start_val, end_val, inc_val, body, False))
+        return result.success(ForNode(var_name, start_val, end_val, inc_val, abstain_cond, body, False))
 
     def while_expr(self):
         result = ParseResult()
@@ -1320,6 +1360,15 @@ class Parser:
 
         cond = result.register(self.pm_func())
         if result.err: return result
+
+        if self.curr_tkn.matches(WT_KEYWORD, 'Abstain'):
+            result.register_next()
+            self.next()
+
+            abstain_cond = result.register(self.pm_func())
+            if result.err: return result
+        else:
+            abstain_cond = None
 
         if not self.curr_tkn.matches(WT_KEYWORD, 'Do'):
             return result.failure(IllegalSyntaxError(self.curr_tkn.start_pos, self.curr_tkn.end_pos, "'Do' Expected"))
@@ -1337,13 +1386,13 @@ class Parser:
             result.register_next()
             self.next()
 
-            return result.success(WhileNode(cond, body, True))
+            return result.success(WhileNode(cond, abstain_cond, body, True))
         
         
         body = result.register(self.singular_statement())
         if result.err: return result
 
-        return result.success(WhileNode(cond, body, False))
+        return result.success(WhileNode(cond, abstain_cond, body, False))
     
     def func_dec(self):
         result = ParseResult()
@@ -1549,6 +1598,8 @@ class Interpreter:
             result, err = l.basic_ops(r, '+')
         elif node.op_tkn.type == WT_MINUS:
             result, err = l.basic_ops(r, '-')
+        elif node.op_tkn.type == WT_SQUIG:
+            result, err = l.basic_ops(r, '~')
         elif node.op_tkn.type == WT_MUL:
             result, err = l.basic_ops(r, '*')
         elif node.op_tkn.type == WT_DIV:
@@ -1635,6 +1686,12 @@ class Interpreter:
             if result.should_return(): return result
         else:
             inc_val = Num(1)
+
+        if node.abstain_cond:
+            abstain_cond = result.register(self.visit(node.abstain_cond, context))
+            if result.should_return(): return result
+        else:
+            abstain_cond = False
         
         i = int(start_val.value)
         int_end = int(end_val.value)
@@ -1647,6 +1704,9 @@ class Interpreter:
         while cond():
             context.symbol_table.set_(node.var_name.value, Num(i))
             i += int(inc_val.value)
+
+            if abstain_cond:
+                continue
 
             val = result.register(self.visit(node.body, context))
             if result.should_return() and result.loop_cont == False and result.loop_break == False: return result
@@ -1669,7 +1729,14 @@ class Interpreter:
             cond = result.register(self.visit(node.cond, context))
             if result.should_return(): return result
 
-            if not cond.is_true(): break
+            abstain_cond = result.register(self.visit(node.abstain_cond, context))
+            if result.should_return(): return result
+
+            if not cond.is_true() or abstain_cond.is_true():
+                if node.abstain_cond:
+                    continue
+                else:
+                    break
 
             val = result.register(self.visit(node.body, context))
             if result.should_return() and result.loop_cont == False and result.loop_break == False: return result
@@ -1792,6 +1859,7 @@ global_sym_table.set_("Run", BuiltInFunction.r)
 global_sym_table.set_("Len", BuiltInFunction.len)
 global_sym_table.set_("Pow", BuiltInFunction.pow)
 global_sym_table.set_("Range", BuiltInFunction.range)
+global_sym_table.set_("StepInc", BuiltInFunction.stepinc)
 
 def run_program(file_name, text):
     new_lexer = Lexer(file_name, text)

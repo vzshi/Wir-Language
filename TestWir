@@ -1,7 +1,5 @@
 # A comment
 
-Func oopify(prefix) => prefix + "oop"
-
 Func join(elements, separator)
     Var result = ""
     Var len = Len(elements)
@@ -13,16 +11,3 @@ Func join(elements, separator)
     Return result
 EndLine
 
-Func map(elements, func)
-    Var new_elements = []
-    For i = 0 To Len(elements) Do
-        Append(new_elements, func(elements^i))
-    EndLine
-    Return new_elements
-EndLine
-
-Print("Greetings universe!")
-
-For i = 0 To 5 Do
-    Print(join(map(["l", "sp"], oopify), ", "))
-EndLine
